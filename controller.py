@@ -93,7 +93,7 @@ def set_flow_by_in_port(switch, in_port, out_port):
         msg.actions.append(of.ofp_action_output(port=out_port))
         send_message(switch)
 
-def _handle_PacketIn(event):
+def handle_PacketIn(event):
     dpid = event.connection.dpid
     switch = get_switch_by_dpid(dpid)
     if switch == "s1":
