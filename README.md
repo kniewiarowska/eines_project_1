@@ -23,7 +23,7 @@
   dodaj następującą linijkę:
 
     ```
-    alias pox="py /home/student/pox/pox.py"
+    alias pox="python /home/student/pox/pox.py"
     ```
     dzięki temu zamiast pisać pox `/home/student/pox/pox.py <plik>` piszemy `pox <plik> `
 - dodaj ścieżkę z projektem  do PYTHONPATH, dzięki czemu pox wykryje plik z kontrolerem:
