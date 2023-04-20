@@ -1,4 +1,4 @@
-
+# -*- coding: utf-8 -*-
 from pox.core import core
 import pox.openflow.libopenflow_01 as of
 from pox.lib.util import dpidToStr
@@ -10,18 +10,20 @@ from pox.lib.packet.packet_utils import *
 import pox.lib.packet as pkt
 from pox.lib.recoco import Timer
 import time
+import re
 
 
 log = core.getLogger()
 
-switches = ["s1", "s2", "s3", "s4", "s5", "s6"]
+switches = ["s1", "s2", "s3", "s4", "s5"]
 dpids = {switch: 0 for switch in switches} # np. {"s1": 1, "s2": 2}
 interfaces = {"s1": [1,2,3,4,5,6], "s2": [1,2], "s3": [1,2], "s4": [1,2], "s5": [1,2,3,4,5,6]}
 links = []
-packets_sent = {switch: {interface: 0 for interface in interfaces[switch]} for switch in switches} # np. {"s1": {1: 0, 2: 0, 3:0, 4:0, 5:0, 6:0}, "s2": ...} mapuje switche na słowniki {nr_interfejsu: liczba_wyslanych_pakietów}
-packets_received = {switch: {interface: 0 for interface in interfaces[switch]} for switch in switches} # jak wyżej, tylko że dla odebranych pakietów
-packets_sent_old = {switch: {interface: 0 for interface in interfaces[switch]} for switch in switches} # jak wyżej, tylko to wartość poprzednich statystyk
-packets_received_old = {switch: {interface: 0 for interface in interfaces[switch]} for switch in switches} # jak wyżej, tylko dla odebranych pakietów
+delays = {1: 40, 2: 50, 3: 60}
+packets_sent = {switch: {interface: 0 for interface in interfaces[switch]} for switch in switches} 
+packets_received = {switch: {interface: 0 for interface in interfaces[switch]} for switch in switches} ## jak wyżej, tylko że dla odebranych pakietów
+packets_sent_old = {switch: {interface: 0 for interface in interfaces[switch]} for switch in switches} ## jak wyżej, tylko to wartość poprzednich statystyk
+packets_received_old = {switch: {interface: 0 for interface in interfaces[switch]} for switch in switches} ## jak wyżej, tylko dla odebranych pakietów
 
 IP = 0x0800
 ARP = 0x0806
@@ -30,17 +32,17 @@ def getTheTime():
     flock = time.localtime()
     return "[%d-%02d-%02d]%02d.%02d.%02d" % (flock.tm_year, flock.tm_mon, flock.tm_mday, flock.tm_hour, flock.tm_min, flock.tm_sec)
 
-def get_switch_by_dpid(dpid)
-    switch = [key for key, value in dpids.items() if dpids[value] == dpid][0]
+def get_switch_by_dpid(dpid):
+    switch = [key for key, value in dpids.items() if dpids[key] == dpid][0]
     return switch
 
 def send_message(switch, message):
-    return core.openflow.getConnection(dpids[switch], message)
+    return core.openflow.getConnection(dpids[switch]).send(message)
 
 def _timer_func():
     stat_request_message = of.ofp_stats_request(body=of.ofp_port_stats_request())
-    for switch in ["s1", "s2", "s3", "s4"]:
-        send_message(switch, stat_request_message)
+    # for switch in ["s1", "s2", "s3", "s4"]:
+    #     send_message(switch, stat_request_message)
 
 def handle_portstats_received(event):
     # Observe the handling of port statistics provided by this function.
@@ -57,14 +59,15 @@ def handle_portstats_received(event):
 
 def handle_ConnectionUp(event):
     # waits for connections from all switches, after connecting to all of them it starts a round robin timer for triggering h1-h4 routing changes
-    print "ConnectionUp: ", dpidToStr(event.connection.dpid)
+    dpid = event.connection.dpid
     # remember the connection dpid for the switch
-    for m in event.connection.features.ports:
-        pattern = r'^s\d+-eth\d+$'
-        if re.match(pattern, m.name):
-            switch = m.name.split("-")[0]
-            dpids[switch] = event.connection.dpid
-            print("{} DPID: {}".format(switch, dpids[switch]))
+    ports = event.connection.features.ports
+    if len(ports) and re.match(r'^s\d', ports[0].name):
+        switch = ports[0].name
+        dpids[switch] = dpid
+        print("Switch {} connected. DPID: {}".format(switch, dpid))
+    else:
+        print("Unrecognized switch connected with ports {}. DPID: {}".format([port.name for port in ports], dpid))
     # start 1-second recurring loop timer for round-robin routing changes; _timer_func is to be called on timer expiration to change the flow entry in s1
     if not any(dpid == 0 for dpid in [dpids[switch] for switch in ["s2", "s3", "s4", "s5"]]):
         Timer(1, _timer_func, recurring=True)
@@ -93,9 +96,8 @@ def set_flow_by_in_port(switch, in_port, out_port):
         msg.actions.append(of.ofp_action_output(port=out_port))
         send_message(switch)
 
-def handle_PacketIn(event):
-    dpid = event.connection.dpid
-    switch = get_switch_by_dpid(dpid)
+def setup_routing(switch):
+    print("Setting up routing for {}".format(switch))
     if switch == "s1":
         for dst in ["10.0.0.4", "10.0.0.5", "10.0.0.6"]:
             set_flow_by_destination(switch=switch, destination=dst, out_port=5)
@@ -113,7 +115,17 @@ def handle_PacketIn(event):
         for in_port, out_port in port_mapping.items():
             set_flow_by_in_port(switch=switch, in_port=in_port, out_port=out_port)
 
-
+def handle_PacketIn(event):
+    dpid = event.connection.dpid
+    switch = get_switch_by_dpid(dpid)
+    packet = event.parsed
+    arp = packet.find("arp")
+    ip = packet.find("ipv4")
+    if arp is not None:
+        print("Switch {} wants to know how to forward ARP packet ({} looking for {})".format(switch, arp.protosrc, arp.protodst))
+    if ip is not None:
+        print("Switch {} wants to know how to forward an IP packet from {} to {}".format(ip.src, ip.dst))
+    setup_routing(switch)
 def launch():
 
     global start_time
@@ -122,7 +134,7 @@ def launch():
     # for examples see e.g. https://noxrepo.github.io/pox-doc/html/#the-openflow-nexus-core-openflow
     # listen for port stats , https://noxrepo.github.io/pox-doc/html/#statistics-events
     core.openflow.addListenerByName(
-        "PortStatsReceived", _handle_portstats_received)
+        "PortStatsReceived", handle_portstats_received)
     # listen for the establishment of a new control channel with a switch, https://noxrepo.github.io/pox-doc/html/#connectionup
     core.openflow.addListenerByName("ConnectionUp", handle_ConnectionUp)
     # listen for the reception of packet_in message from switch, https://noxrepo.github.io/pox-doc/html/#packetin

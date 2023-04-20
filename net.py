@@ -12,6 +12,7 @@ from functools import partial
 from mininet.node import RemoteController
 import os
 
+
 # Topology: switches interconnected in diamond topology (3 parallel paths, no cross-links); 3 hosts on each side of the diamond
 
 class MyTopo(Topo):

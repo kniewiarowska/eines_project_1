@@ -20,17 +20,13 @@
   ``` 
   sudo vi ~/.bashrc 
   ```
-  dodaj następującą linijkę:
+  dodaj następujące linijki:
 
     ```
     alias pox="python /home/student/pox/pox.py"
+    export PYTHONPATH=(ścieżka do projektu)
     ```
     dzięki temu zamiast pisać pox `/home/student/pox/pox.py <plik>` piszemy `pox <plik> `
-- dodaj ścieżkę z projektem  do PYTHONPATH, dzięki czemu pox wykryje plik z kontrolerem:
-  ``` 
-  cd eines_project_1
-  export PYTHONPATH=$PYTHONPATH:$(pwd) 
-  ```
 - uruchomienie sieci:
   ```
   python net.py

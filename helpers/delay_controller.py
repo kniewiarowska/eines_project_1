@@ -96,7 +96,7 @@ def _handle_PacketIn (event):
 
   received_time = time.time() * 1000*10 - start_time #amount of time elapsed from start_time
 
-  packet = event.parsed
+  print(packet)
   #print packet
  
   if packet.type==0x5577 and event.connection.dpid==dst_dpid: #0x5577 is unregistered EtherType, here assigned to probe packets
