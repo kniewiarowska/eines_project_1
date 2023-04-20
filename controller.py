@@ -28,6 +28,8 @@ packets_received_old = {switch: {interface: 0 for interface in interfaces[switch
 IP = 0x0800
 ARP = 0x0806
 
+
+
 def getTheTime():
     flock = time.localtime()
     return "[%d-%02d-%02d]%02d.%02d.%02d" % (flock.tm_year, flock.tm_mon, flock.tm_mday, flock.tm_hour, flock.tm_min, flock.tm_sec)
@@ -41,8 +43,9 @@ def send_message(switch, message):
 
 def _timer_func():
     stat_request_message = of.ofp_stats_request(body=of.ofp_port_stats_request())
-    # for switch in ["s1", "s2", "s3", "s4"]:
-    #     send_message(switch, stat_request_message)
+    for switch in ["s1", "s2", "s3", "s4"]:
+        send_message(switch, stat_request_message)
+    print("Packets received: {}".format(packets_received["s1"]))
 
 def handle_portstats_received(event):
     # Observe the handling of port statistics provided by this function.
@@ -94,7 +97,7 @@ def set_flow_by_in_port(switch, in_port, out_port):
         msg.match.dl_type = protocol
         msg.match.in_port = in_port
         msg.actions.append(of.ofp_action_output(port=out_port))
-        send_message(switch)
+        send_message(switch, msg)
 
 def setup_routing(switch):
     print("Setting up routing for {}".format(switch))
@@ -121,11 +124,17 @@ def handle_PacketIn(event):
     packet = event.parsed
     arp = packet.find("arp")
     ip = packet.find("ipv4")
-    if arp is not None:
-        print("Switch {} wants to know how to forward ARP packet ({} looking for {})".format(switch, arp.protosrc, arp.protodst))
-    if ip is not None:
-        print("Switch {} wants to know how to forward an IP packet from {} to {}".format(ip.src, ip.dst))
+    print("Switch {} got packet and doesnt know what to do with it: {}".format(switch, packet.__dict__))
     setup_routing(switch)
+    # print("Switch {} doesnt know how to handle packet: {}".format(switch, packet.__dict__))
+    # if arp is not None:
+    #     print("Switch {} wants to know how to forward ARP packet ({} looking for {})".format(switch, arp.protosrc, arp.protodst))
+    # if ip is not None:
+    #     print("Switch {} wants to know how to forward an IP packet from {} to {}".format(ip.src, ip.dst))
+    # setup_routing(switch)
+
+
+
 def launch():
 
     global start_time
