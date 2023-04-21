@@ -35,12 +35,7 @@ IP = 0x0800
 ARP = 0x0806
 
 loaded_intents = []
-monitored_intent = {
-    "source": "h1",
-    "destination": "h6",
-    "max_latency": 50,
-    "live_time": 100 #ms
-}
+monitored_intent = {}
 
 def getTimestamp():
     return int(time.time() * 10000) - controller_start_time
@@ -185,6 +180,10 @@ def handle_received_probe(switch, packet):
 
 def handle_PacketIn(event):
     dpid = event.connection.dpid
+    print(dir(dpid))
+    print(dir(event.connection))
+    print(core.openflow.getConnection(dpid))
+
     switch = get_switch_by_dpid(dpid)
     packet = event.parsed
     arp = packet.find("arp")
@@ -202,10 +201,14 @@ def handle_PacketIn(event):
 def load_intents():
     f = open('intents.json')
     data = json.load(f)
-    print("parsed data ", data['intents'])
+    loaded_intents= data['intents']
     for i in data['intents']:
         print("intent: ", i)
     f.close()
+
+def process_intent(intent):
+    if(monitored_intent == {}):
+        monitored_intent = intent
 
 
 def launch():
@@ -213,6 +216,7 @@ def launch():
     global controller_start_time
     controller_start_time = getTimestamp()
     load_intents()
+    setup_routing("s1")
     # core is an instance of class POXCore (EventMixin) and it can register objects.
     # An object with name xxx can be registered to core instance which makes this object become a "component" available as pox.core.core.xxx.
     # for examples see e.g. https://noxrepo.github.io/pox-doc/html/#the-openflow-nexus-core-openflow
