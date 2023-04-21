@@ -15,20 +15,64 @@ import re
 
 log = core.getLogger()
 
+controller_start_time = 0
 switches = ["s1", "s2", "s3", "s4", "s5"]
 dpids = {switch: 0 for switch in switches} # np. {"s1": 1, "s2": 2}
 interfaces = {"s1": [1,2,3,4,5,6], "s2": [1,2], "s3": [1,2], "s4": [1,2], "s5": [1,2,3,4,5,6]}
 links = []
-delays = {1: 40, 2: 50, 3: 60}
+delays = {switch: 0 for switch in ["s2", "s3", "s4"]}
+portstats_request_times = {switch: 0 for switch in ["s2", "s3","s4"]}
+portstats_response_times = {switch: 0 for switch in ["s2", "s3","s4"]}
+switch_controller_delays = {switch: 0 for switch in ["s2", "s3","s4"]}
+switch_controller_delay = {switch: 0 for switch in ["s2", "s3","s4"]}
 packets_sent = {switch: {interface: 0 for interface in interfaces[switch]} for switch in switches} 
 packets_received = {switch: {interface: 0 for interface in interfaces[switch]} for switch in switches} ## jak wyżej, tylko że dla odebranych pakietów
 packets_sent_old = {switch: {interface: 0 for interface in interfaces[switch]} for switch in switches} ## jak wyżej, tylko to wartość poprzednich statystyk
 packets_received_old = {switch: {interface: 0 for interface in interfaces[switch]} for switch in switches} ## jak wyżej, tylko dla odebranych pakietów
-
+packet_out_time = 0
+packet_in_times = {"s2": 0, "s3": 0, "s4": 0}
 IP = 0x0800
 ARP = 0x0806
 
 
+def getTimestamp():
+    return int(time.time() * 10000) - controller_start_time
+
+class ProbePacket(packet_base):
+      #My Protocol packet struct
+  """
+  myproto class defines our special type of packet to be sent all the way along including the link between the switches to measure link delays;
+  it adds member attribute named timestamp to carry packet creation/sending time by the controller, and defines the 
+  function hdr() to return the header of measurement packet (header will contain timestamp)
+  """
+  #For more info on packet_base class refer to file pox/lib/packet/packet_base.py
+
+  def __init__(self):
+     packet_base.__init__(self)
+     self.timestamp=0
+
+  def hdr(self, payload):
+     return struct.pack('!I', self.timestamp) # code as unsigned int (I), network byte order (!, big-endian - the most significant byte of a word at the smallest memory address)
+
+def send_probe_packets():
+    for port in [4, 5, 6]:
+        f = ProbePacket() #create a probe packet object
+        e = pkt.ethernet() #create L2 type packet (frame) object
+        e.src = EthAddr("ca:fe:ca:fe:ca:fe")
+        e.dst = EthAddr("ca:fe:ca:fe:ca:fe")
+        e.type=0x5577 #set unregistered EtherType in L2 header type field, here assigned to the probe packet type 
+        msg = of.ofp_packet_out() #create PACKET_OUT message object
+        msg.actions.append(of.ofp_action_output(port=port))
+        f.timestamp = getTimestamp()
+        e.payload = f
+        msg.data = e.pack()
+        send_message("s1", msg)
+
+def handle_ConnectionDown (event):
+  #Handle connection down - stop the timer for sending the probes
+  global mytimer
+  print "ConnectionDown: ", dpidToStr(event.connection.dpid)
+  mytimer.cancel()
 
 def getTheTime():
     flock = time.localtime()
@@ -43,14 +87,21 @@ def send_message(switch, message):
 
 def _timer_func():
     stat_request_message = of.ofp_stats_request(body=of.ofp_port_stats_request())
-    for switch in ["s1", "s2", "s3", "s4"]:
-        send_message(switch, stat_request_message)
-    print("Packets received: {}".format(packets_received["s1"]))
+    for switch in ["s1", "s2", "s3", "s4", "s5"]:
+        portstats_request_times[switch] = getTimestamp()
+        if(switch in ["s2", "s3", "s4"]):
+            send_message(switch, stat_request_message)
+    send_probe_packets()
+    print("Delays to switches: {}".format(delays))
 
 def handle_portstats_received(event):
     # Observe the handling of port statistics provided by this function.
     dpid = event.connection.dpid
     switch = get_switch_by_dpid(dpid)
+    portstats_response_times[switch] = getTimestamp()
+    switch_controller_delay = (portstats_response_times[switch] - portstats_request_times[switch]) / 2
+    switch_controller_delays[switch] = switch_controller_delay
+    # print("{}: {} {} {}".format(switch, portstats_request_times[switch], portstats_response_times[switch], delay))
     for f in event.stats:
         port_number = int(f.port_no)
         if port_number >= 65534:
@@ -118,17 +169,25 @@ def setup_routing(switch):
         for in_port, out_port in port_mapping.items():
             set_flow_by_in_port(switch=switch, in_port=in_port, out_port=out_port)
 
+def handle_received_probe(switch, packet):
+    c=packet.find('ethernet').payload
+    d,= struct.unpack('!I', c)
+    delays[switch] = (getTimestamp() - switch_controller_delays[switch] - d) / 10
+    # print(getTimestamp() - d - switch_controller_delays[switch])
+    # print(switch_controller_delays[switch])
+
 def handle_PacketIn(event):
     dpid = event.connection.dpid
     switch = get_switch_by_dpid(dpid)
     packet = event.parsed
     arp = packet.find("arp")
     ip = packet.find("ipv4")
-    print("Switch {} got packet and doesnt know what to do with it: {}".format(switch, packet.__dict__))
-    setup_routing(switch)
+    if packet.type==0x5577: #0x5577 is unregistered EtherType, here assigned to 
+        handle_received_probe(switch, packet)
+    if ip is not None:
+        print("Switch {} wants to know how to forward an IP packet from {} to {}".format(ip.src, ip.dst))
+    # setup_routing(switch)
     # print("Switch {} doesnt know how to handle packet: {}".format(switch, packet.__dict__))
-    # if arp is not None:
-    #     print("Switch {} wants to know how to forward ARP packet ({} looking for {})".format(switch, arp.protosrc, arp.protodst))
     # if ip is not None:
     #     print("Switch {} wants to know how to forward an IP packet from {} to {}".format(ip.src, ip.dst))
     # setup_routing(switch)
@@ -137,7 +196,8 @@ def handle_PacketIn(event):
 
 def launch():
 
-    global start_time
+    global controller_start_time
+    controller_start_time = getTimestamp()
     # core is an instance of class POXCore (EventMixin) and it can register objects.
     # An object with name xxx can be registered to core instance which makes this object become a "component" available as pox.core.core.xxx.
     # for examples see e.g. https://noxrepo.github.io/pox-doc/html/#the-openflow-nexus-core-openflow
