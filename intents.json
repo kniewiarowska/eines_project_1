@@ -1,0 +1,11 @@
+{
+    "intents": [
+        {"source": "h1", "destination": "h6"},
+        {"source": "h2", "destination": "h5"},
+        {"source": "h2", "destination": "h4"},
+        {"source": "h3", "destination": "h4"},
+        {"source": "h2", "destination": "h6"},
+        {"source": "h2", "destination": "h6"},
+        {"source": "h1", "destination": "h6"}
+    ]
+}
