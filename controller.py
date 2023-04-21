@@ -17,7 +17,14 @@ log = core.getLogger()
 
 controller_start_time = 0
 switches = ["s1", "s2", "s3", "s4", "s5"]
-dpids = {switch: 0 for switch in switches} # np. {"s1": 1, "s2": 2}
+hosts = [{"name": "h1", "address": "10.0.0.1"}, {"name": "h2", "address": "10.0.0.2"}, 
+         {"name": "h3", "address": "10.0.0.3"}, {"name": "h4", "address": "10.0.0.4"}, 
+         {"name": "h5", "address": "10.0.0.5"}, {"name": "h6", "address": "10.0.0.6"}]
+routes = [{"id": 1, "left-right": {"s1": 4, "s2": 2}, "right-left": {"s5": 1, "s2": 1}},
+          {"id": 2, "left-right": {"s1": 5, "s3": 2}, "right-left": {"s5": 2, "s3": 1}},
+          {"id": 3, "left-right": {"s1": 6, "s4": 2}, "right-left": {"s5": 3, "s4": 1}}]
+#dpids = {switch: 0 for switch in switches} # np. {"s1": 1, "s2": 2}
+dpids = {switch: index+1 for index, switch in enumerate(switches)}
 interfaces = {"s1": [1,2,3,4,5,6], "s2": [1,2], "s3": [1,2], "s4": [1,2], "s5": [1,2,3,4,5,6]}
 links = []
 delays = {switch: 0 for switch in ["s2", "s3", "s4"]}
@@ -85,6 +92,8 @@ def get_switch_by_dpid(dpid):
     return switch
 
 def send_message(switch, message):
+    print(switch, dpids[switch])
+    print(core.openflow.getConnection(dpids[switch]))
     return core.openflow.getConnection(dpids[switch]).send(message)
 
 def _timer_func():
@@ -116,6 +125,7 @@ def handle_portstats_received(event):
 def handle_ConnectionUp(event):
     # waits for connections from all switches, after connecting to all of them it starts a round robin timer for triggering h1-h4 routing changes
     dpid = event.connection.dpid
+    print("dpid ", dpid)
     # remember the connection dpid for the switch
     ports = event.connection.features.ports
     if len(ports) and re.match(r'^s\d', ports[0].name):
@@ -180,9 +190,10 @@ def handle_received_probe(switch, packet):
 
 def handle_PacketIn(event):
     dpid = event.connection.dpid
-    print(dir(dpid))
-    print(dir(event.connection))
-    print(core.openflow.getConnection(dpid))
+
+    #print(dir(dpid))
+    #print(dir(event.connection))
+    #print(core.openflow.getConnection(dpids["s1"]))
 
     switch = get_switch_by_dpid(dpid)
     packet = event.parsed
@@ -202,21 +213,33 @@ def load_intents():
     f = open('intents.json')
     data = json.load(f)
     loaded_intents= data['intents']
-    for i in data['intents']:
-        print("intent: ", i)
+    #for i in data['intents']:
+        #print("intent: ", i)
     f.close()
 
 def process_intent(intent):
     if(monitored_intent == {}):
         monitored_intent = intent
+        source_intent_dpid = dpids[intent.source]
+        destination_intent_dpid = dpids[intent.destination]
+        set_flow_by_destination()
 
+def setup_switch_host_connections():
+    #print(dpids)
+    set_flow_by_destination(switch="s1", destination="10.0.0.1", out_port=1)
+    set_flow_by_destination(switch="s1", destination="10.0.0.2", out_port=2)
+    set_flow_by_destination(switch="s1", destination="10.0.0.3", out_port=3)
+
+    set_flow_by_destination(switch="s5", destination="10.0.0.4", out_port=4)
+    set_flow_by_destination(switch="s5", destination="10.0.0.5", out_port=5)
+    set_flow_by_destination(switch="s5", destination="10.0.0.6", out_port=6)
+    print("Host-switch configuration was completed")
 
 def launch():
 
     global controller_start_time
     controller_start_time = getTimestamp()
     load_intents()
-    setup_routing("s1")
     # core is an instance of class POXCore (EventMixin) and it can register objects.
     # An object with name xxx can be registered to core instance which makes this object become a "component" available as pox.core.core.xxx.
     # for examples see e.g. https://noxrepo.github.io/pox-doc/html/#the-openflow-nexus-core-openflow
@@ -225,5 +248,6 @@ def launch():
         "PortStatsReceived", handle_portstats_received)
     # listen for the establishment of a new control channel with a switch, https://noxrepo.github.io/pox-doc/html/#connectionup
     core.openflow.addListenerByName("ConnectionUp", handle_ConnectionUp)
+
     # listen for the reception of packet_in message from switch, https://noxrepo.github.io/pox-doc/html/#packetin
     core.openflow.addListenerByName("PacketIn", handle_PacketIn)
