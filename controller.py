@@ -190,6 +190,33 @@ def handle_received_probe(switch, packet):
     # print(getTimestamp() - d - switch_controller_delays[switch])
     # print(switch_controller_delays[switch])
 
+def handle_arp_packet(packet, connection):
+    #obsługa ARP REQUEST Packet
+    if packet.opcode == 1:
+        msg = of.ofp_flow_mod()
+        msg.priority =1
+        msg.idle_timeout = 0
+        msg.match.in_port =1
+        msg.match.dl_type=0x0806
+        msg.actions.append(of.ofp_action_output(port = 2))
+        print("dpid: {} msg: {}".format(connection.dpid, msg))
+        if connection.dpid in dpids.values():
+            connection.send(msg)
+        
+
+    #obłsuga ARP REPLY Packet
+    if packet.opcode == 2:
+        msg = of.ofp_flow_mod()
+        msg.priority =1
+        msg.idle_timeout = 0
+        msg.match.in_port =2
+        msg.match.dl_type=0x0806
+        msg.actions.append(of.ofp_action_output(port = 1))
+        print("dpid: {} msg: {}".format(connection.dpid, msg))
+        if connection.dpid in dpids.values():
+            connection.send(msg)
+
+
 def handle_PacketIn(event):
     dpid = event.connection.dpid
     switch = get_switch_by_dpid(dpid)
@@ -199,11 +226,16 @@ def handle_PacketIn(event):
     ip = packet.find("ipv4")
     ethernet = packet.find("ethernet")
 
-    print("JESTEM W HANLDE PACKET IN, pokaz mi swoj pakiecik i jego ip {} -  {}".format(packet, ip))
-    print("Switch {} doesnt know packet: {}".format(switch, packet.__dict__))
+    #print("Pakiet ARP {}".format(arp))
+    #print("JESTEM W HANLDE PACKET IN, pokaz mi swoj pakiecik i jego ip {} -  {}".format(packet, ip))
+    #print("Switch {} doesnt know packet: {}".format(switch, packet.__dict__))
     if packet.type==0x5577: #0x5577 is unregistered EtherType, here assigned to 
         handle_received_probe(switch, packet)
     #so far tu nigdzie nie wchodzi
+
+    if arp is not None:
+        handle_arp_packet(arp, event.connection)
+
     if ip is not None:
         print("Switch {} wants to know how to forward an IP packet from {} to {}".format(ip.src, ip.dst))
         process_intent(dpid, switch, ip.src, ip.dst)
