@@ -21,7 +21,7 @@ switches = ["s1", "s2", "s3", "s4", "s5"]
 hosts = [{"name": "h1", "address": "10.0.0.1"}, {"name": "h2", "address": "10.0.0.2"}, 
          {"name": "h3", "address": "10.0.0.3"}, {"name": "h4", "address": "10.0.0.4"}, 
          {"name": "h5", "address": "10.0.0.5"}, {"name": "h6", "address": "10.0.0.6"}]
-flow_table = [] # na poczatku wyobrazam sobie, ze to jest {"id": 1, "source": "h1", destination: "h6", "route": [switch1, switch2, switch3]}
+flow_table = [] # na poczatku wyobrazam sobie, ze to jest {"id": 1, "source": "h1", destination: "h6", "route": route_name}
 dpids = {switch: 0 for switch in switches} # np. {"s1": 1, "s2": 2}
 #dpids = {switch: index+1 for index, switch in enumerate(switches)}
 interfaces = {"s1": [1,2,3,4,5,6], "s2": [1,2], "s3": [1,2], "s4": [1,2], "s5": [1,2,3,4,5,6]}
@@ -38,8 +38,9 @@ packets_received = {switch: {interface: 0 for interface in interfaces[switch]} f
 packets_sent_old = {switch: {interface: 0 for interface in interfaces[switch]} for switch in switches} ## jak wyżej, tylko to wartość poprzednich statystyk
 packets_received_old = {switch: {interface: 0 for interface in interfaces[switch]} for switch in switches} ## jak wyżej, tylko dla odebranych pakietów
 packet_out_time = 0
+not_fulfilled_monitored_intent_counter = 0
 packet_in_times = {"s2": 0, "s3": 0, "s4": 0}
-
+MAX_TIME_EXCEEDED_MONITORED_INTENT = 10
 IP = 0x0800
 ARP = 0x0806
 
@@ -92,8 +93,6 @@ def get_switch_by_dpid(dpid):
     return switch
 
 def send_message(switch, message):
-    #print(switch, dpids[switch])
-    #print(core.openflow.getConnection(dpids[switch]))
     return core.openflow.getConnection(dpids[switch]).send(message)
 
 def _timer_func():
@@ -124,7 +123,6 @@ def handle_portstats_received(event):
         packets_sent_old[switch][port_number] = packets_sent[switch][port_number]
         packets_sent[switch][port_number] = f.tx_packets
     
-
 def handle_ConnectionUp(event):
     # waits for connections from all switches, after connecting to all of them it starts a round robin timer for triggering h1-h4 routing changes
     dpid = event.connection.dpid
@@ -166,6 +164,17 @@ def set_flow_by_in_port(switch, in_port, out_port):
         msg.match.in_port = in_port
         msg.actions.append(of.ofp_action_output(port=out_port))
         send_message(switch, msg)
+
+def delete_flow(dpid, match):
+    connection = core.openflow.getConnection(dpid)
+    if connection is None:
+        print("Failure during getting a connection")
+        return
+    flow_mod = of.ofp_flow_mod(command=of.OFPFC_DELETE)
+    flow_mod.match = match
+    print("connection {} {}".format(dpid, flow_mod))
+    connection.send(flow_mod)
+    #msg.send()
 
 def setup_routing(switch):
     print("Setting up routing for {}".format(switch))
@@ -237,13 +246,19 @@ def handle_PacketIn(event):
     # setup_routing(switch)
 
 def check_if_monitored_intent_is_fulfilled():
-    global monitored_intent
-
+    global monitored_intent, not_fulfilled_monitored_intent_counter
     monitored_flow = find_flow_to_intent(monitored_intent)
+    if monitored_flow is None:
+        return
+    print("monitored flow: {} {}".format(monitored_flow, monitored_flow["route"]))
     middle_switch = map_route_name_to_middle_switch(monitored_flow["route"])
     if delays[middle_switch] > monitored_intent["latency"]:
-        print("A ROUTE {} ({}) DOESN'T FULFILL THE INTENT'S LATENCY {} ms".format(monitored_flow["route"], middle_switch, monitored_intent["latency"]))
-        change_monitored_intent_route()
+        print("[{}] A ROUTE {} ({}) DOESN'T FULFILL THE INTENT'S LATENCY {} ms".format(not_fulfilled_monitored_intent_counter, monitored_flow["route"], middle_switch, monitored_intent["latency"]))
+        not_fulfilled_monitored_intent_counter = not_fulfilled_monitored_intent_counter + 1
+        if not_fulfilled_monitored_intent_counter > MAX_TIME_EXCEEDED_MONITORED_INTENT:
+            not_fulfilled_monitored_intent_counter = 0
+            change_monitored_intent_route()
+            
 
 def load_intents():
     global loaded_intents
@@ -263,6 +278,11 @@ def map_host_name_to_address(host_name):
         if host["name"] == host_name:
             return host["address"]
 
+def map_address_to_host_name(address):
+    for host in hosts:
+        if host["address"] == address:
+            return host["name"]
+
 def map_route_name_to_middle_switch(route_name):
     if route_name == "upper":
         return "s2"
@@ -270,7 +290,7 @@ def map_route_name_to_middle_switch(route_name):
         return "s3"
     elif route_name == "down":
         return "s4"
-        
+
 #s1 -> s2 -> s5 and back
 def set_upper_route(source, destination):
     source_ip = map_host_name_to_address(source)
@@ -291,6 +311,24 @@ def set_down_route(source, destination):
     destination_ip = map_host_name_to_address(destination)
     set_flow_by_destination(switch="s1", destination=destination_ip, out_port=6)
     set_flow_by_destination(switch="s5", destination=source_ip, out_port=3)
+
+def create_match(source_ip, destination_ip):
+    return of.ofp_match(in_port=2, dl_type=0x800, nw_src=source_ip, nw_dst=destination_ip)
+
+def delete_flow_between_hosts(source, destination):
+    global flow_table
+    s1_dpid = dpids["s1"]
+    s5_dpid = dpids["s5"]
+    match = create_match(source, destination)
+    delete_flow(s1_dpid, match)
+    delete_flow(s5_dpid, match)
+    matching_flow = {}
+    source_name = map_address_to_host_name(source)
+    destination_name = map_address_to_host_name(destination)
+    for index, flow in enumerate(flow_table):
+        if flow["source"] == source_name and flow["destination"] == destination_name:
+            flow_table.pop(index)
+    print("flow_table after removing a flow between {} and {} : {}".format(source_name, destination_name, flow_table))
 
 def set_route(route_name, source, destination):
     if(route_name == "upper"):
@@ -376,7 +414,12 @@ def get_the_index_of_min_load(loads):
        return indexes[randrange(len(indexes))]     
 
 def change_monitored_intent_route():
-    print("")
+    global monitored_intent
+    source_ip = map_host_name_to_address(monitored_intent["source"])
+    destination_ip = map_host_name_to_address(monitored_intent["destination"])
+    print("Monitored intent is being removed: {}".format(monitored_intent))
+    #print("IPs: {} {}".format(source_ip, destination_ip))
+    delete_flow_between_hosts(source_ip, destination_ip)
 
 def setup_switch_host_connections(switch):
     if switch == "s1":
