@@ -1,11 +1,13 @@
 {
     "intents": [
-        {"source": "h1", "destination": "h6"},
-        {"source": "h2", "destination": "h5"},
-        {"source": "h2", "destination": "h4"},
-        {"source": "h3", "destination": "h4"},
-        {"source": "h2", "destination": "h6"},
-        {"source": "h2", "destination": "h6"},
-        {"source": "h1", "destination": "h6"}
+        {"source": "h1", "destination": "h6", "latency": 30},
+        {"source": "h1", "destination": "h5", "latency": 35},
+        {"source": "h1", "destination": "h4", "latency": 27},
+        {"source": "h2", "destination": "h5", "latency": 20},
+        {"source": "h2", "destination": "h4", "latency": 10},
+        {"source": "h2", "destination": "h6", "latency": 50},
+        {"source": "h3", "destination": "h4", "latency": 60},
+        {"source": "h3", "destination": "h5", "latency": 15},
+        {"source": "h3", "destination": "h6", "latency": 25}
     ]
 }

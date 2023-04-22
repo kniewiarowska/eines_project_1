@@ -55,11 +55,17 @@ def perfTest():
     h1,h2,h3=net.get('h1','h2','h3')
     h4,h5,h6=net.get('h4','h5','h6')
     h1.setMAC("0:0:0:0:0:1")
+    h1.setIP("10.0.0.1/24")
     h2.setMAC("0:0:0:0:0:2")
+    h2.setIP("10.0.0.2/24")
     h3.setMAC("0:0:0:0:0:3")
+    h3.setIP("10.0.0.3/24")
     h4.setMAC("0:0:0:0:0:4")
+    h4.setIP("10.0.0.4/24")
     h5.setMAC("0:0:0:0:0:5")
+    h5.setIP("10.0.0.5/24")
     h6.setMAC("0:0:0:0:0:6")
+    h6.setIP("10.0.0.6/24")
     CLI(net) # launch simple Mininet CLI terminal window
     net.stop()
 

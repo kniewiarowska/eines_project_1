@@ -23,8 +23,9 @@ hosts = [{"name": "h1", "address": "10.0.0.1"}, {"name": "h2", "address": "10.0.
 routes = [{"id": 1, "left-right": {"s1": 4, "s2": 2}, "right-left": {"s5": 1, "s2": 1}},
           {"id": 2, "left-right": {"s1": 5, "s3": 2}, "right-left": {"s5": 2, "s3": 1}},
           {"id": 3, "left-right": {"s1": 6, "s4": 2}, "right-left": {"s5": 3, "s4": 1}}]
-#dpids = {switch: 0 for switch in switches} # np. {"s1": 1, "s2": 2}
-dpids = {switch: index+1 for index, switch in enumerate(switches)}
+flow_table = [] # na poczatku wyobrazam sobie, ze to jest {"id": 1, "source": "h1", destination: "h6", "route": [switch1, switch2, switch3]}
+dpids = {switch: 0 for switch in switches} # np. {"s1": 1, "s2": 2}
+#dpids = {switch: index+1 for index, switch in enumerate(switches)}
 interfaces = {"s1": [1,2,3,4,5,6], "s2": [1,2], "s3": [1,2], "s4": [1,2], "s5": [1,2,3,4,5,6]}
 links = []
 delays = {switch: 0 for switch in ["s2", "s3", "s4"]}
@@ -191,19 +192,22 @@ def handle_received_probe(switch, packet):
 
 def handle_PacketIn(event):
     dpid = event.connection.dpid
-
-    #print(dir(dpid))
-    #print(dir(event.connection))
-    #print(core.openflow.getConnection(dpids["s1"]))
-
     switch = get_switch_by_dpid(dpid)
     packet = event.parsed
     arp = packet.find("arp")
+    # tu sie zwraca None
     ip = packet.find("ipv4")
+    ethernet = packet.find("ethernet")
+
+    print("JESTEM W HANLDE PACKET IN, pokaz mi swoj pakiecik i jego ip {} -  {}".format(packet, ip))
+    print("Switch {} doesnt know packet: {}".format(switch, packet.__dict__))
     if packet.type==0x5577: #0x5577 is unregistered EtherType, here assigned to 
         handle_received_probe(switch, packet)
+    #so far tu nigdzie nie wchodzi
     if ip is not None:
         print("Switch {} wants to know how to forward an IP packet from {} to {}".format(ip.src, ip.dst))
+        process_intent(dpid, switch, ip.src, ip.dst)
+
     # setup_routing(switch)
     # print("Switch {} doesnt know how to handle packet: {}".format(switch, packet.__dict__))
     # if ip is not None:
@@ -219,13 +223,40 @@ def load_intents():
     f.close()
     print("Loaded intents {}".format(loaded_intents))
 
-def process_intent(intent):
-    if(monitored_intent == {}):
-        monitored_intent = intent
-        source_intent_dpid = dpids[intent.source]
-        destination_intent_dpid = dpids[intent.destination]
-        set_flow_by_destination()
+    
+#process_intent(dpid, switch, ip.src, ip.dst)
+def process_intent(dpid, switch, source, destination):
+    #czy to jest wgl okej, to sie bedzie wywolywac po tym, jak switch stwierdzi, ze nie wie jak forwardowac pakiet
+    #available_flow = {}
+    #for flow in flows:
+        #if(flow.source == source and flow.destination == destination):
+            #available_flow = flow
+            #break
+    
+    #to jest na pewno sytuacja, ze nie wiemy jak forwardowac pakiet, ale jak oblsugiwac te pakiety jak mamy pare flow na to samo src i dst ale z innym latency
+    #przychodzi nam jakis pakiet to powinnismy tworzyc na podstawie jego intent czy wybierac
+    #tylko wtedy mamy taki constraint, ze mamy liste intentow na kazdy mozliwy flow i 
+    #stale latency i z tej listy wybieramy sobie pasujacy intent do naszego src i dst pakietu
+    #no bo jak inaczej - przyjdzie nam pakiet o takim i takim src i dst i nie mamy dla niego intentu
+    print("Co nam tu przyszlo: {} {} {} {}".format(dpid, switch, source, destination))
+    if monitored_intent == {}:
+        #iterujemy sobie po intentach i szukamy takiego, ktory bedzie miec matchujace src i dst
+        for intent in load_intents:
+            if intent.source == source and intent.destination == destination:
+                monitored_intent = intent
+                break
+        
+        print("monitored intent: {}".format(monitored_intent))
+        max_latency = monitored_intent.latency
+        for delay in delays:
+            print("delay: {} delay value: {}".format(delay, delay.value))
 
+        
+        #set_flow_by_destination()
+    else:
+        print("SIABADABA")
+
+#JAK USUWAĆ FLOWY
 def setup_switch_host_connections(switch):
     if(switch == "s1"):
         set_flow_by_destination(switch="s1", destination="10.0.0.1", out_port=1)
