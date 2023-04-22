@@ -12,6 +12,7 @@ from pox.lib.recoco import Timer
 import time
 import re
 import json
+from random import randrange
 
 log = core.getLogger()
 
@@ -137,7 +138,7 @@ def handle_ConnectionUp(event):
     # start 1-second recurring loop timer for round-robin routing changes; _timer_func is to be called on timer expiration to change the flow entry in s1
     if not any(dpid == 0 for dpid in [dpids[switch] for switch in ["s2", "s3", "s4", "s5"]]):
         Timer(1, _timer_func, recurring=True)
-        process_intent()
+        process_intents()
 
 def set_flow_by_destination(switch, destination, out_port):
     protocols = [IP, ARP]
@@ -277,6 +278,15 @@ def set_down_route(source, destination):
     set_flow_by_destination(switch="s1", destination=destination_ip, out_port=6)
     set_flow_by_destination(switch="s5", destination=source_ip, out_port=3)
 
+def set_route(route_name, source, destination):
+    if(route_name == "upper"):
+        set_upper_route(source, destination)
+    elif(route_name == "middle"):
+        set_middle_route(source, destination)
+    elif(route_name == "down"):
+        set_down_route(source, destination)
+
+
 #to check network policy
 def get_flow_numbers_per_route(route_name):
     counter = 0
@@ -285,15 +295,25 @@ def get_flow_numbers_per_route(route_name):
             counter = counter + 1
     return counter
 
-    
-def process_intent():
+
+def process_intents():
+    global monitored_intent
+    monitored_intent = loaded_intents[0]
+    for i in loaded_intents:
+        process_intent(i)
+        
+def process_intent(intent):
+    if intent == monitored_intent:
+        process_monitored_intent(intent)
+    else: 
+        process_not_mointored_intent(intent)
+
+
+def process_monitored_intent(intent): 
     suitable_switch = {"switch": "", "delay": 100000000000}
-    intent = {}
-    if(loaded_intents):
-        intent = loaded_intents[0]    
-        for interface_delay in delays:
-            if delays[interface_delay] <= intent["latency"] and delays[interface_delay] < suitable_switch["delay"] :
-                suitable_switch = {"switch": interface_delay, "delay": delays[interface_delay]}
+    for interface_delay in delays:
+        if delays[interface_delay] <= intent["latency"] and delays[interface_delay] < suitable_switch["delay"] :
+            suitable_switch = {"switch": interface_delay, "delay": delays[interface_delay]}
 
     chosen_route = ""
     if suitable_switch == {"switch": "", "delay": 100000000000}:
@@ -315,6 +335,37 @@ def process_intent():
                        "source": intent["source"], 
                        "destination": intent["destination"],
                        "route": chosen_route})
+
+def process_not_mointored_intent(intent): #not mointored intents - set flows only based on policy
+    chosen_route = get_route_name_with_smallest_load()
+    set_route(chosen_route, intent["source"], intent["destination"])
+    flow_table.append({"id": (len(flow_table) + 1), 
+                       "source": intent["source"], 
+                       "destination": intent["destination"],
+                       "route": chosen_route})
+
+def get_route_name_with_smallest_load():
+    route_names = ["upper", "middle", "down"]
+    loads = []
+    for route_name in ["upper", "middle", "down"]:
+        load = get_flow_numbers_per_route(route_name)
+        loads.append(load)  
+        
+    return route_names[get_the_index_of_min_load(loads)]
+
+def get_the_index_of_min_load(loads):
+    min_load = min(loads)
+    indexes = []
+    for index, load in enumerate(loads):
+        if(min_load == load):
+            indexes.append(index)
+
+    if(len(indexes) == 1):
+        return indexes[0]      
+    else:
+       return indexes[randrange(len(indexes))]   
+
+    
 
 
 def setup_switch_host_connections(switch):
