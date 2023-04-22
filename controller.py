@@ -92,8 +92,8 @@ def get_switch_by_dpid(dpid):
     return switch
 
 def send_message(switch, message):
-    print(switch, dpids[switch])
-    print(core.openflow.getConnection(dpids[switch]))
+    #print(switch, dpids[switch])
+    #print(core.openflow.getConnection(dpids[switch]))
     return core.openflow.getConnection(dpids[switch]).send(message)
 
 def _timer_func():
@@ -125,13 +125,14 @@ def handle_portstats_received(event):
 def handle_ConnectionUp(event):
     # waits for connections from all switches, after connecting to all of them it starts a round robin timer for triggering h1-h4 routing changes
     dpid = event.connection.dpid
-    print("dpid ", dpid)
+    #print("dpid ", dpid)
     # remember the connection dpid for the switch
     ports = event.connection.features.ports
     if len(ports) and re.match(r'^s\d', ports[0].name):
         switch = ports[0].name
         dpids[switch] = dpid
         print("Switch {} connected. DPID: {}".format(switch, dpid))
+        setup_switch_host_connections(switch)
     else:
         print("Unrecognized switch connected with ports {}. DPID: {}".format([port.name for port in ports], dpid))
     # start 1-second recurring loop timer for round-robin routing changes; _timer_func is to be called on timer expiration to change the flow entry in s1
@@ -216,6 +217,7 @@ def load_intents():
     #for i in data['intents']:
         #print("intent: ", i)
     f.close()
+    print("Loaded intents {}".format(loaded_intents))
 
 def process_intent(intent):
     if(monitored_intent == {}):
@@ -224,16 +226,19 @@ def process_intent(intent):
         destination_intent_dpid = dpids[intent.destination]
         set_flow_by_destination()
 
-def setup_switch_host_connections():
-    #print(dpids)
-    set_flow_by_destination(switch="s1", destination="10.0.0.1", out_port=1)
-    set_flow_by_destination(switch="s1", destination="10.0.0.2", out_port=2)
-    set_flow_by_destination(switch="s1", destination="10.0.0.3", out_port=3)
+def setup_switch_host_connections(switch):
+    if(switch == "s1"):
+        set_flow_by_destination(switch="s1", destination="10.0.0.1", out_port=1)
+        set_flow_by_destination(switch="s1", destination="10.0.0.2", out_port=2)
+        set_flow_by_destination(switch="s1", destination="10.0.0.3", out_port=3)
+        print("Host-switch {} configuration was completed".format(switch))
 
-    set_flow_by_destination(switch="s5", destination="10.0.0.4", out_port=4)
-    set_flow_by_destination(switch="s5", destination="10.0.0.5", out_port=5)
-    set_flow_by_destination(switch="s5", destination="10.0.0.6", out_port=6)
-    print("Host-switch configuration was completed")
+    if(switch == "s5"):
+        set_flow_by_destination(switch="s5", destination="10.0.0.4", out_port=4)
+        set_flow_by_destination(switch="s5", destination="10.0.0.5", out_port=5)
+        set_flow_by_destination(switch="s5", destination="10.0.0.6", out_port=6)
+        print("Host-switch {} configuration was completed".format(switch))
+    
 
 def launch():
 
@@ -248,6 +253,5 @@ def launch():
         "PortStatsReceived", handle_portstats_received)
     # listen for the establishment of a new control channel with a switch, https://noxrepo.github.io/pox-doc/html/#connectionup
     core.openflow.addListenerByName("ConnectionUp", handle_ConnectionUp)
-
     # listen for the reception of packet_in message from switch, https://noxrepo.github.io/pox-doc/html/#packetin
     core.openflow.addListenerByName("PacketIn", handle_PacketIn)
