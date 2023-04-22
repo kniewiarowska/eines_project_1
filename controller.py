@@ -104,6 +104,8 @@ def _timer_func():
             send_message(switch, stat_request_message)
     send_probe_packets()
     print("Delays to switches: {}".format(delays))
+    print("Flows load: {}".format(get_routes_statistics()))
+    check_if_monitored_intent_is_fulfilled()
 
 def handle_portstats_received(event):
     # Observe the handling of port statistics provided by this function.
@@ -121,6 +123,7 @@ def handle_portstats_received(event):
         packets_received[switch][port_number] = f.rx_packets
         packets_sent_old[switch][port_number] = packets_sent[switch][port_number]
         packets_sent[switch][port_number] = f.tx_packets
+    
 
 def handle_ConnectionUp(event):
     # waits for connections from all switches, after connecting to all of them it starts a round robin timer for triggering h1-h4 routing changes
@@ -200,9 +203,7 @@ def handle_arp_packet(packet, connection):
         msg.match.dl_type=0x0806
         msg.actions.append(of.ofp_action_output(port = 2))
         print("dpid: {} msg: {}".format(connection.dpid, msg))
-        #if connection.dpid in dpids.values():
-        connection.send(msg)
-        
+        connection.send(msg)  
 
     #obłsuga ARP REPLY Packet
     if packet.opcode == 2:
@@ -212,8 +213,6 @@ def handle_arp_packet(packet, connection):
         msg.match.in_port =2
         msg.match.dl_type=0x0806
         msg.actions.append(of.ofp_action_output(port = 1))
-        #print("dpid: {} msg: {}".format(connection.dpid, msg))
-        #if connection.dpid in dpids.values():
         connection.send(msg)
 
 def handle_PacketIn(event):
@@ -223,18 +222,11 @@ def handle_PacketIn(event):
     arp = packet.find("arp")
     # tu sie zwraca None
     ip = packet.find("ipv4")
-    ethernet = packet.find("ethernet")
 
-    #print("Pakiet ARP {}".format(arp))
-    #print("JESTEM W HANLDE PACKET IN, pokaz mi swoj pakiecik i jego ip {} -  {}".format(packet, ip))
-    #print("Switch {} doesnt know packet: {}".format(switch, packet.__dict__))
     if packet.type==0x5577: #0x5577 is unregistered EtherType, here assigned to 
         handle_received_probe(switch, packet)
-    #so far tu nigdzie nie wchodzi
-
     if arp is not None:
         handle_arp_packet(arp, event.connection)
-
     if ip is not None:
         print("Switch {} wants to know how to forward an IP packet from {} to {}".format(ip.src, ip.dst))
 
@@ -244,6 +236,15 @@ def handle_PacketIn(event):
     #     print("Switch {} wants to know how to forward an IP packet from {} to {}".format(ip.src, ip.dst))
     # setup_routing(switch)
 
+def check_if_monitored_intent_is_fulfilled():
+    global monitored_intent
+
+    monitored_flow = find_flow_to_intent(monitored_intent)
+    middle_switch = map_route_name_to_middle_switch(monitored_flow["route"])
+    if delays[middle_switch] > monitored_intent["latency"]:
+        print("A ROUTE {} ({}) DOESN'T FULFILL THE INTENT'S LATENCY {} ms".format(monitored_flow["route"], middle_switch, monitored_intent["latency"]))
+        change_monitored_intent_route()
+
 def load_intents():
     global loaded_intents
     f = open('intents.json')
@@ -252,10 +253,23 @@ def load_intents():
     f.close()
     print("Loaded intents: {}".format(loaded_intents))
 
+def find_flow_to_intent(intent):
+    for flow in flow_table:
+        if flow["source"] == intent["source"] and flow["destination"] == intent["destination"]:
+            return flow 
+
 def map_host_name_to_address(host_name):
     for host in hosts:
         if host["name"] == host_name:
             return host["address"]
+
+def map_route_name_to_middle_switch(route_name):
+    if route_name == "upper":
+        return "s2"
+    elif route_name == "middle":
+        return "s3"
+    elif route_name == "down":
+        return "s4"
         
 #s1 -> s2 -> s5 and back
 def set_upper_route(source, destination):
@@ -286,6 +300,12 @@ def set_route(route_name, source, destination):
     elif(route_name == "down"):
         set_down_route(source, destination)
 
+#get routes statistics ie how much flows there is per route
+def get_routes_statistics():
+    upper_route_number = get_flow_numbers_per_route("upper")
+    middle_route_number = get_flow_numbers_per_route("middle")
+    down_route_number = get_flow_numbers_per_route("down")
+    return {"upper_route": upper_route_number, "middle_route": middle_route_number, "down_route": down_route_number}
 
 #to check network policy
 def get_flow_numbers_per_route(route_name):
@@ -294,7 +314,6 @@ def get_flow_numbers_per_route(route_name):
         if flow["route"] == route_name:
             counter = counter + 1
     return counter
-
 
 def process_intents():
     global monitored_intent
@@ -307,7 +326,6 @@ def process_intent(intent):
         process_monitored_intent(intent)
     else: 
         process_not_mointored_intent(intent)
-
 
 def process_monitored_intent(intent): 
     suitable_switch = {"switch": "", "delay": 100000000000}
@@ -331,26 +349,19 @@ def process_monitored_intent(intent):
         chosen_route = "down"
         print("A flow for intent {} was set through a down route".format(intent))
     
-    flow_table.append({"id": (len(flow_table) + 1), 
-                       "source": intent["source"], 
-                       "destination": intent["destination"],
-                       "route": chosen_route})
+    flow_table.append({"id": (len(flow_table) + 1), "source": intent["source"], "destination": intent["destination"], "route": chosen_route})
 
 def process_not_mointored_intent(intent): #not mointored intents - set flows only based on policy
     chosen_route = get_route_name_with_smallest_load()
     set_route(chosen_route, intent["source"], intent["destination"])
-    flow_table.append({"id": (len(flow_table) + 1), 
-                       "source": intent["source"], 
-                       "destination": intent["destination"],
-                       "route": chosen_route})
+    flow_table.append({"id": (len(flow_table) + 1), "source": intent["source"], "destination": intent["destination"], "route": chosen_route})
 
 def get_route_name_with_smallest_load():
     route_names = ["upper", "middle", "down"]
     loads = []
     for route_name in ["upper", "middle", "down"]:
         load = get_flow_numbers_per_route(route_name)
-        loads.append(load)  
-        
+        loads.append(load)    
     return route_names[get_the_index_of_min_load(loads)]
 
 def get_the_index_of_min_load(loads):
@@ -359,14 +370,13 @@ def get_the_index_of_min_load(loads):
     for index, load in enumerate(loads):
         if(min_load == load):
             indexes.append(index)
-
     if(len(indexes) == 1):
         return indexes[0]      
     else:
-       return indexes[randrange(len(indexes))]   
+       return indexes[randrange(len(indexes))]     
 
-    
-
+def change_monitored_intent_route():
+    print("")
 
 def setup_switch_host_connections(switch):
     if switch == "s1":
