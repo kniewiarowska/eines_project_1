@@ -25,6 +25,8 @@ dpids = {switch: 0 for switch in switches} # np. {"s1": 1, "s2": 2}
 #dpids = {switch: index+1 for index, switch in enumerate(switches)}
 interfaces = {"s1": [1,2,3,4,5,6], "s2": [1,2], "s3": [1,2], "s4": [1,2], "s5": [1,2,3,4,5,6]}
 links = []
+loaded_intents = []
+monitored_intent = {}
 delays = {switch: 0 for switch in ["s2", "s3", "s4"]}
 portstats_request_times = {switch: 0 for switch in ["s2", "s3","s4"]}
 portstats_response_times = {switch: 0 for switch in ["s2", "s3","s4"]}
@@ -36,11 +38,10 @@ packets_sent_old = {switch: {interface: 0 for interface in interfaces[switch]} f
 packets_received_old = {switch: {interface: 0 for interface in interfaces[switch]} for switch in switches} ## jak wyżej, tylko dla odebranych pakietów
 packet_out_time = 0
 packet_in_times = {"s2": 0, "s3": 0, "s4": 0}
+
 IP = 0x0800
 ARP = 0x0806
 
-loaded_intents = []
-monitored_intent = {}
 
 def getTimestamp():
     return int(time.time() * 10000) - controller_start_time
@@ -243,14 +244,12 @@ def handle_PacketIn(event):
     # setup_routing(switch)
 
 def load_intents():
+    global loaded_intents
     f = open('intents.json')
     data = json.load(f)
-    loaded_intents= data['intents']
-    #for i in data['intents']:
-        #print("intent: ", i)
-    #monitored_intent = loaded_intents[0]
+    loaded_intents = data['intents']
     f.close()
-    print("Loaded intents {}".format(loaded_intents))
+    print("Loaded intents: {}".format(loaded_intents))
 
 def map_host_name_to_address(host_name):
     for host in hosts:
@@ -277,25 +276,25 @@ def set_down_route(source, destination):
     destination_ip = map_host_name_to_address(destination)
     set_flow_by_destination(switch="s1", destination=destination_ip, out_port=6)
     set_flow_by_destination(switch="s5", destination=source_ip, out_port=3)
+
+#to check network policy
+def get_flow_numbers_per_route(route_name):
+    counter = 0
+    for flow in flow_table:
+        if flow["route"] == route_name:
+            counter = counter + 1
+    return counter
+
     
 def process_intent():
-    #if monitored_intent == {}:
-    #    monitored_intent = loaded_intents[0]
-    #    print("monitored intent: {}", monitored_intent)
-
-    f = open('intents.json')
-    data = json.load(f)
-    loaded_intents= data['intents']
-    f.close()
-
+    suitable_switch = {"switch": "", "delay": 100000000000}
+    intent = {}
     if(loaded_intents):
         intent = loaded_intents[0]    
-        suitable_switch = {"switch": "", "delay": 100000000000}
         for interface_delay in delays:
             if delays[interface_delay] <= intent["latency"] and delays[interface_delay] < suitable_switch["delay"] :
                 suitable_switch = {"switch": interface_delay, "delay": delays[interface_delay]}
 
-    #print(suitable_switch)
     chosen_route = ""
     if suitable_switch == {"switch": "", "delay": 100000000000}:
         print("No suitable route available for max latency {}".format(intent["latency"]))
@@ -317,36 +316,6 @@ def process_intent():
                        "destination": intent["destination"],
                        "route": chosen_route})
 
-    #czy to jest wgl okej, to sie bedzie wywolywac po tym, jak switch stwierdzi, ze nie wie jak forwardowac pakiet
-    #available_flow = {}
-    #for flow in flows:
-        #if(flow.source == source and flow.destination == destination):
-            #available_flow = flow
-            #break
-    
-    #to jest na pewno sytuacja, ze nie wiemy jak forwardowac pakiet, ale jak oblsugiwac te pakiety jak mamy pare flow na to samo src i dst ale z innym latency
-    #przychodzi nam jakis pakiet to powinnismy tworzyc na podstawie jego intent czy wybierac
-    #tylko wtedy mamy taki constraint, ze mamy liste intentow na kazdy mozliwy flow i 
-    #stale latency i z tej listy wybieramy sobie pasujacy intent do naszego src i dst pakietu
-    #no bo jak inaczej - przyjdzie nam pakiet o takim i takim src i dst i nie mamy dla niego intentu
-
-    # print("Co nam tu przyszlo: {} {} {} {}".format(dpid, switch, source, destination))
-    # if monitored_intent == {}:
-    #     #iterujemy sobie po intentach i szukamy takiego, ktory bedzie miec matchujace src i dst
-    #     for intent in load_intents:
-    #         if intent.source == source and intent.destination == destination:
-    #             monitored_intent = intent
-    #             break
-        
-    #     print("monitored intent: {}".format(monitored_intent))
-    #     max_latency = monitored_intent.latency
-    #     for delay in delays:
-    #         print("delay: {} delay value: {}".format(delay, delay.value))
-
-        
-    #     #set_flow_by_destination()
-    # else:
-    #     print("SIABADABA")
 
 def setup_switch_host_connections(switch):
     if switch == "s1":
