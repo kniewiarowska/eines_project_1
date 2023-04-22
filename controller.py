@@ -254,8 +254,8 @@ def load_intents():
 
 def map_host_name_to_address(host_name):
     for host in hosts:
-        if host.name == host_name:
-            return host.address
+        if host["name"] == host_name:
+            return host["address"]
         
 #s1 -> s2 -> s5 and back
 def set_upper_route(source, destination):
@@ -289,30 +289,32 @@ def process_intent():
     f.close()
 
     if(loaded_intents):
-        intent = loaded_intents[0]
-        print("intent: {}".format(intent))
-    
-    suitable_switch = {"switch": "", "delay": float('inf')}
-    for interface_delay in delays:
-        if interface_delay.value <= intent.latency and interface_delay.value < suitable_switch.delay :
-            suitable_switch = interface_delay
+        intent = loaded_intents[0]    
+        suitable_switch = {"switch": "", "delay": 100000000000}
+        for interface_delay in delays:
+            if delays[interface_delay] <= intent["latency"] and delays[interface_delay] < suitable_switch["delay"] :
+                suitable_switch = {"switch": interface_delay, "delay": delays[interface_delay]}
 
+    #print(suitable_switch)
     chosen_route = ""
-    if suitable_switch == {"switch": "", "delay": float('inf')}:
-        print("No suitable route available for max latency {}".format(intent.latency))
-    elif suitable_switch.switch == "s2":
-        set_upper_route(intent.source, intent.destination)
+    if suitable_switch == {"switch": "", "delay": 100000000000}:
+        print("No suitable route available for max latency {}".format(intent["latency"]))
+    elif suitable_switch["switch"] == "s2":
+        set_upper_route(intent["source"], intent["destination"])
         chosen_route = "upper"
-    elif suitable_switch.switch == "s3":
-        set_middle_route(intent.source, intent.destination)
+        print("A flow for intent {} was set through an upper route".format(intent))
+    elif suitable_switch["switch"] == "s3":
+        set_middle_route(intent["source"], intent["destination"])
         chosen_route = "middle"
-    elif suitable_switch.switch == "s4":
-        set_down_route(intent.source, intent.destination)
+        print("A flow for intent {} was set through a middle route".format(intent))
+    elif suitable_switch["switch"] == "s4":
+        set_down_route(intent["source"], intent["destination"])
         chosen_route = "down"
+        print("A flow for intent {} was set through a down route".format(intent))
     
     flow_table.append({"id": (len(flow_table) + 1), 
-                       "source": intent.source, 
-                       "destination": intent.destination,
+                       "source": intent["source"], 
+                       "destination": intent["destination"],
                        "route": chosen_route})
 
     #czy to jest wgl okej, to sie bedzie wywolywac po tym, jak switch stwierdzi, ze nie wie jak forwardowac pakiet
@@ -363,6 +365,7 @@ def setup_switch_host_connections(switch):
         port_mapping = {1: 2, 2: 1}
         for in_port, out_port in port_mapping.items():
             set_flow_by_in_port(switch=switch, in_port=in_port, out_port=out_port)
+        print("Connection for switch {} was set up".format(switch))
     
 
 def launch():
