@@ -20,9 +20,6 @@ switches = ["s1", "s2", "s3", "s4", "s5"]
 hosts = [{"name": "h1", "address": "10.0.0.1"}, {"name": "h2", "address": "10.0.0.2"}, 
          {"name": "h3", "address": "10.0.0.3"}, {"name": "h4", "address": "10.0.0.4"}, 
          {"name": "h5", "address": "10.0.0.5"}, {"name": "h6", "address": "10.0.0.6"}]
-routes = [{"id": 1, "left-right": {"s1": 4, "s2": 2}, "right-left": {"s5": 1, "s2": 1}},
-          {"id": 2, "left-right": {"s1": 5, "s3": 2}, "right-left": {"s5": 2, "s3": 1}},
-          {"id": 3, "left-right": {"s1": 6, "s4": 2}, "right-left": {"s5": 3, "s4": 1}}]
 flow_table = [] # na poczatku wyobrazam sobie, ze to jest {"id": 1, "source": "h1", destination: "h6", "route": [switch1, switch2, switch3]}
 dpids = {switch: 0 for switch in switches} # np. {"s1": 1, "s2": 2}
 #dpids = {switch: index+1 for index, switch in enumerate(switches)}
@@ -139,6 +136,7 @@ def handle_ConnectionUp(event):
     # start 1-second recurring loop timer for round-robin routing changes; _timer_func is to be called on timer expiration to change the flow entry in s1
     if not any(dpid == 0 for dpid in [dpids[switch] for switch in ["s2", "s3", "s4", "s5"]]):
         Timer(1, _timer_func, recurring=True)
+        process_intent()
 
 def set_flow_by_destination(switch, destination, out_port):
     protocols = [IP, ARP]
@@ -184,7 +182,7 @@ def setup_routing(switch):
             set_flow_by_in_port(switch=switch, in_port=in_port, out_port=out_port)
 
 def handle_received_probe(switch, packet):
-    c=packet.find('ethernet').payload
+    c = packet.find('ethernet').payload
     d,= struct.unpack('!I', c)
     delays[switch] = (getTimestamp() - switch_controller_delays[switch] - d) / 10
     # print(getTimestamp() - d - switch_controller_delays[switch])
@@ -200,8 +198,8 @@ def handle_arp_packet(packet, connection):
         msg.match.dl_type=0x0806
         msg.actions.append(of.ofp_action_output(port = 2))
         print("dpid: {} msg: {}".format(connection.dpid, msg))
-        if connection.dpid in dpids.values():
-            connection.send(msg)
+        #if connection.dpid in dpids.values():
+        connection.send(msg)
         
 
     #obłsuga ARP REPLY Packet
@@ -212,10 +210,9 @@ def handle_arp_packet(packet, connection):
         msg.match.in_port =2
         msg.match.dl_type=0x0806
         msg.actions.append(of.ofp_action_output(port = 1))
-        print("dpid: {} msg: {}".format(connection.dpid, msg))
-        if connection.dpid in dpids.values():
-            connection.send(msg)
-
+        #print("dpid: {} msg: {}".format(connection.dpid, msg))
+        #if connection.dpid in dpids.values():
+        connection.send(msg)
 
 def handle_PacketIn(event):
     dpid = event.connection.dpid
@@ -238,7 +235,6 @@ def handle_PacketIn(event):
 
     if ip is not None:
         print("Switch {} wants to know how to forward an IP packet from {} to {}".format(ip.src, ip.dst))
-        process_intent(dpid, switch, ip.src, ip.dst)
 
     # setup_routing(switch)
     # print("Switch {} doesnt know how to handle packet: {}".format(switch, packet.__dict__))
@@ -252,12 +248,73 @@ def load_intents():
     loaded_intents= data['intents']
     #for i in data['intents']:
         #print("intent: ", i)
+    #monitored_intent = loaded_intents[0]
     f.close()
     print("Loaded intents {}".format(loaded_intents))
 
+def map_host_name_to_address(host_name):
+    for host in hosts:
+        if host.name == host_name:
+            return host.address
+        
+#s1 -> s2 -> s5 and back
+def set_upper_route(source, destination):
+    source_ip = map_host_name_to_address(source)
+    destination_ip = map_host_name_to_address(destination)
+    set_flow_by_destination(switch="s1", destination=destination_ip, out_port=4)
+    set_flow_by_destination(switch="s5", destination=source_ip, out_port=1)
+
+#s1 -> s3 -> s5 and back
+def set_middle_route(source, destination):
+    source_ip = map_host_name_to_address(source)
+    destination_ip = map_host_name_to_address(destination)
+    set_flow_by_destination(switch="s1", destination=destination_ip, out_port=5)
+    set_flow_by_destination(switch="s5", destination=source_ip, out_port=2)
+
+#s1 -> s4 -> s5 and back
+def set_down_route(source, destination):
+    source_ip = map_host_name_to_address(source)
+    destination_ip = map_host_name_to_address(destination)
+    set_flow_by_destination(switch="s1", destination=destination_ip, out_port=6)
+    set_flow_by_destination(switch="s5", destination=source_ip, out_port=3)
     
-#process_intent(dpid, switch, ip.src, ip.dst)
-def process_intent(dpid, switch, source, destination):
+def process_intent():
+    #if monitored_intent == {}:
+    #    monitored_intent = loaded_intents[0]
+    #    print("monitored intent: {}", monitored_intent)
+
+    f = open('intents.json')
+    data = json.load(f)
+    loaded_intents= data['intents']
+    f.close()
+
+    if(loaded_intents):
+        intent = loaded_intents[0]
+        print("intent: {}".format(intent))
+    
+    suitable_switch = {"switch": "", "delay": float('inf')}
+    for interface_delay in delays:
+        if interface_delay.value <= intent.latency and interface_delay.value < suitable_switch.delay :
+            suitable_switch = interface_delay
+
+    chosen_route = ""
+    if suitable_switch == {"switch": "", "delay": float('inf')}:
+        print("No suitable route available for max latency {}".format(intent.latency))
+    elif suitable_switch.switch == "s2":
+        set_upper_route(intent.source, intent.destination)
+        chosen_route = "upper"
+    elif suitable_switch.switch == "s3":
+        set_middle_route(intent.source, intent.destination)
+        chosen_route = "middle"
+    elif suitable_switch.switch == "s4":
+        set_down_route(intent.source, intent.destination)
+        chosen_route = "down"
+    
+    flow_table.append({"id": (len(flow_table) + 1), 
+                       "source": intent.source, 
+                       "destination": intent.destination,
+                       "route": chosen_route})
+
     #czy to jest wgl okej, to sie bedzie wywolywac po tym, jak switch stwierdzi, ze nie wie jak forwardowac pakiet
     #available_flow = {}
     #for flow in flows:
@@ -270,37 +327,42 @@ def process_intent(dpid, switch, source, destination):
     #tylko wtedy mamy taki constraint, ze mamy liste intentow na kazdy mozliwy flow i 
     #stale latency i z tej listy wybieramy sobie pasujacy intent do naszego src i dst pakietu
     #no bo jak inaczej - przyjdzie nam pakiet o takim i takim src i dst i nie mamy dla niego intentu
-    print("Co nam tu przyszlo: {} {} {} {}".format(dpid, switch, source, destination))
-    if monitored_intent == {}:
-        #iterujemy sobie po intentach i szukamy takiego, ktory bedzie miec matchujace src i dst
-        for intent in load_intents:
-            if intent.source == source and intent.destination == destination:
-                monitored_intent = intent
-                break
+
+    # print("Co nam tu przyszlo: {} {} {} {}".format(dpid, switch, source, destination))
+    # if monitored_intent == {}:
+    #     #iterujemy sobie po intentach i szukamy takiego, ktory bedzie miec matchujace src i dst
+    #     for intent in load_intents:
+    #         if intent.source == source and intent.destination == destination:
+    #             monitored_intent = intent
+    #             break
         
-        print("monitored intent: {}".format(monitored_intent))
-        max_latency = monitored_intent.latency
-        for delay in delays:
-            print("delay: {} delay value: {}".format(delay, delay.value))
+    #     print("monitored intent: {}".format(monitored_intent))
+    #     max_latency = monitored_intent.latency
+    #     for delay in delays:
+    #         print("delay: {} delay value: {}".format(delay, delay.value))
 
         
-        #set_flow_by_destination()
-    else:
-        print("SIABADABA")
+    #     #set_flow_by_destination()
+    # else:
+    #     print("SIABADABA")
 
-#JAK USUWAĆ FLOWY
 def setup_switch_host_connections(switch):
-    if(switch == "s1"):
+    if switch == "s1":
         set_flow_by_destination(switch="s1", destination="10.0.0.1", out_port=1)
         set_flow_by_destination(switch="s1", destination="10.0.0.2", out_port=2)
         set_flow_by_destination(switch="s1", destination="10.0.0.3", out_port=3)
         print("Host-switch {} configuration was completed".format(switch))
 
-    if(switch == "s5"):
+    if switch == "s5":
         set_flow_by_destination(switch="s5", destination="10.0.0.4", out_port=4)
         set_flow_by_destination(switch="s5", destination="10.0.0.5", out_port=5)
         set_flow_by_destination(switch="s5", destination="10.0.0.6", out_port=6)
         print("Host-switch {} configuration was completed".format(switch))
+
+    if switch in ["s2", "s3", "s4"]:
+        port_mapping = {1: 2, 2: 1}
+        for in_port, out_port in port_mapping.items():
+            set_flow_by_in_port(switch=switch, in_port=in_port, out_port=out_port)
     
 
 def launch():
