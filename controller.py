@@ -396,8 +396,17 @@ def process_monitored_intent():
             suitable_switch = {"switch": interface_delay, "delay": delays[interface_delay]}
     chosen_route = ""
     if not suitable_switch:
-        print("No suitable route available for max latency {}".format(intent["latency"]))
-        return
+        print("No suitable route available for max latency {} - the route with smallest load is chosen".format(intent["latency"]))
+        chosen_route = get_route_name_with_smallest_load()
+        if chosen_route == "upper":
+            set_upper_route(intent["source"], intent["destination"])
+            print("A flow for monitored intent {} was set through an upper route".format(intent))
+        if chosen_route == "middle":            
+            set_middle_route(intent["source"], intent["destination"])
+            print("A flow for monitored intent {} was set through a middle route".format(intent))
+        if chosen_route == "down":
+            set_down_route(intent["source"], intent["destination"])
+            print("A flow for monitored intent {} was set through a down route".format(intent))
     elif suitable_switch["switch"] == "s2":
         set_upper_route(intent["source"], intent["destination"])
         chosen_route = "upper"
