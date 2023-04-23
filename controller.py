@@ -13,6 +13,8 @@ import time
 import re
 import json
 from random import randrange
+import threading
+import uuid
 
 log = core.getLogger()
 
@@ -21,6 +23,8 @@ switches = ["s1", "s2", "s3", "s4", "s5"]
 hosts = [{"name": "h1", "address": "10.0.0.1"}, {"name": "h2", "address": "10.0.0.2"}, 
          {"name": "h3", "address": "10.0.0.3"}, {"name": "h4", "address": "10.0.0.4"}, 
          {"name": "h5", "address": "10.0.0.5"}, {"name": "h6", "address": "10.0.0.6"}]
+hostname_to_ip = {host["name"]: host["address"] for host in hosts}
+ip_to_hostname = {host["address"]: host["name"] for host in hosts}
 flow_table = [] # na poczatku wyobrazam sobie, ze to jest {"id": 1, "source": "h1", destination: "h6", "route": route_name}
 dpids = {switch: 0 for switch in switches} # np. {"s1": 1, "s2": 2}
 #dpids = {switch: index+1 for index, switch in enumerate(switches)}
@@ -141,7 +145,7 @@ def handle_ConnectionUp(event):
         Timer(1, _timer_func, recurring=True)
         process_intents()
 
-def set_flow_by_destination(switch, destination, out_port):
+def set_flow_by_destination(switch,  destination, out_port):
     protocols = [IP, ARP]
     for protocol in protocols:
         msg = of.ofp_flow_mod()
@@ -149,6 +153,19 @@ def set_flow_by_destination(switch, destination, out_port):
         msg.idle_timeout = 0
         msg.hard_timeout = 0
         msg.match.dl_type = protocol
+        msg.match.nw_dst = destination
+        msg.actions.append(of.ofp_action_output(port=out_port))
+        send_message(switch, msg)
+
+def set_flow(switch, source, destination, out_port):
+    protocols = [IP, ARP]
+    for protocol in protocols:
+        msg = of.ofp_flow_mod()
+        msg.priority = 100
+        msg.idle_timeout = 0
+        msg.hard_timeout = 0
+        msg.match.dl_type = protocol
+        msg.match.nw_src = source
         msg.match.nw_dst = destination
         msg.actions.append(of.ofp_action_output(port=out_port))
         send_message(switch, msg)
@@ -165,17 +182,19 @@ def set_flow_by_in_port(switch, in_port, out_port):
         msg.actions.append(of.ofp_action_output(port=out_port))
         send_message(switch, msg)
 
-def delete_flow(in_port, dpid, match):
-    connection = core.openflow.getConnection(dpid)
+def delete_flow(switch, source, destination):
+    connection = core.openflow.getConnection(dpids[switch])
     if connection is None:
         print("Failure during getting a connection")
         return
-    flow_mod = of.ofp_flow_mod(command=of.OFPFC_DELETE)
-    flow_mod.match = match
-    #flow_mod.actions.append(of.ofp_action_output(port=in_port))
-    print("connection {} {}".format(dpid, flow_mod))
-    connection.send(flow_mod)
-    #msg.send()
+    for protocol in [IP, ARP]:
+        flow_mod = of.ofp_flow_mod(command=of.OFPFC_DELETE)
+        flow_mod.match.dl_type = protocol
+        flow_mod.match.nw_src = source
+        flow_mod.match.nw_dst = destination
+        #print("connection {} {}".format(dpids[switch], flow_mod))
+        connection.send(flow_mod)
+    
 
 def setup_routing(switch):
     print("Setting up routing for {}".format(switch))
@@ -274,16 +293,6 @@ def find_flow_to_intent(intent):
         if flow["source"] == intent["source"] and flow["destination"] == intent["destination"]:
             return flow 
 
-def map_host_name_to_address(host_name):
-    for host in hosts:
-        if host["name"] == host_name:
-            return host["address"]
-
-def map_address_to_host_name(address):
-    for host in hosts:
-        if host["address"] == address:
-            return host["name"]
-
 def map_route_name_to_middle_switch(route_name):
     if route_name == "upper":
         return "s2"
@@ -294,56 +303,35 @@ def map_route_name_to_middle_switch(route_name):
 
 #s1 -> s2 -> s5 and back
 def set_upper_route(source, destination):
-    source_ip = map_host_name_to_address(source)
-    destination_ip = map_host_name_to_address(destination)
-    set_flow_by_destination(switch="s1", destination=destination_ip, out_port=4)
-    set_flow_by_destination(switch="s5", destination=source_ip, out_port=1)
+    source_ip = hostname_to_ip[source]
+    destination_ip = hostname_to_ip[destination]
+    set_flow(switch="s1", source=source_ip, destination=destination_ip, out_port=4)
+    set_flow(switch="s5", source=destination_ip,destination=source_ip, out_port=1)
 
 #s1 -> s3 -> s5 and back
 def set_middle_route(source, destination):
-    source_ip = map_host_name_to_address(source)
-    destination_ip = map_host_name_to_address(destination)
-    set_flow_by_destination(switch="s1", destination=destination_ip, out_port=5)
-    set_flow_by_destination(switch="s5", destination=source_ip, out_port=2)
+    source_ip = hostname_to_ip[source]
+    destination_ip = hostname_to_ip[destination]
+    set_flow(switch="s1", source=source_ip, destination=destination_ip, out_port=5)
+    set_flow(switch="s5", source=destination_ip, destination=source_ip, out_port=2)
 
 #s1 -> s4 -> s5 and back
 def set_down_route(source, destination):
-    source_ip = map_host_name_to_address(source)
-    destination_ip = map_host_name_to_address(destination)
-    set_flow_by_destination(switch="s1", destination=destination_ip, out_port=6)
-    set_flow_by_destination(switch="s5", destination=source_ip, out_port=3)
+    source_ip = hostname_to_ip[source]
+    destination_ip = hostname_to_ip[destination]
+    set_flow(switch="s1", source=source_ip, destination=destination_ip, out_port=6)
+    set_flow(switch="s5", source=destination_ip, destination=source_ip, out_port=3)
 
-def create_match(source_ip, destination_ip):
-    return of.ofp_match(dl_type=0x800, nw_src=source_ip, nw_dst=destination_ip)
 
 def delete_flow_between_hosts(intent):
     global flow_table
-    s1_dpid = dpids["s1"]
-    s5_dpid = dpids["s5"]
-    matching_flow = find_flow_to_intent(intent)
-    source = map_host_name_to_address(intent["source"])
-    destination = map_host_name_to_address(intent["destination"])
-    if matching_flow["route"] == "upper":
-        in_port = 4
-    elif matching_flow["route"] == "middle":
-        in_port = 5
-    elif matching_flow["route"] == "down":
-        in_port = 6
-    match = create_match(source, destination)
-    delete_flow(in_port, s1_dpid, match)
-    if matching_flow["route"] == "upper":
-        in_port = 1
-    elif matching_flow["route"] == "middle":
-        in_port = 2
-    elif matching_flow["route"] == "down":
-        in_port = 3
-    match = create_match(source, destination)
-    delete_flow(in_port, s5_dpid, match)
-    source_name = map_address_to_host_name(source)
-    destination_name = map_address_to_host_name(destination)
-    for index, flow in enumerate(flow_table):
-        if flow["source"] == source_name and flow["destination"] == destination_name:
-            flow_table.pop(index)
+    source_name = intent["source"]
+    destination_name = intent["destination"]
+    source = hostname_to_ip[source_name]
+    destination = hostname_to_ip[destination_name]
+    delete_flow("s1", source=source, destination=destination)
+    delete_flow("s5", source=destination, destination=source)
+    flow_table = [flow for flow in flow_table if not(flow["source"] == source_name and flow["destination"] == destination_name)]
     print("flow_table after removing a flow between {} and {} : {}".format(source_name, destination_name, flow_table))
 
 def set_route(route_name, source, destination):
@@ -377,19 +365,20 @@ def process_intents():
         
 def process_intent(intent):
     if intent == monitored_intent:
-        process_monitored_intent(intent)
+        process_monitored_intent()
     else: 
         process_not_mointored_intent(intent)
 
-def process_monitored_intent(intent): 
-    suitable_switch = {"switch": "", "delay": 100000000000}
+def process_monitored_intent():
+    intent = monitored_intent
+    suitable_switch = None
     for interface_delay in delays:
-        if delays[interface_delay] <= intent["latency"] and delays[interface_delay] < suitable_switch["delay"] :
+        if delays[interface_delay] <= intent["latency"]:
             suitable_switch = {"switch": interface_delay, "delay": delays[interface_delay]}
-
     chosen_route = ""
-    if suitable_switch == {"switch": "", "delay": 100000000000}:
+    if not suitable_switch:
         print("No suitable route available for max latency {}".format(intent["latency"]))
+        return
     elif suitable_switch["switch"] == "s2":
         set_upper_route(intent["source"], intent["destination"])
         chosen_route = "upper"
@@ -403,7 +392,7 @@ def process_monitored_intent(intent):
         chosen_route = "down"
         print("A flow for intent {} was set through a down route".format(intent))
     
-    flow_table.append({"id": (len(flow_table) + 1), "source": intent["source"], "destination": intent["destination"], "route": chosen_route})
+    flow_table.append({"id": str(uuid.uuid1()), "source": intent["source"], "destination": intent["destination"], "route": chosen_route})
 
 def process_not_mointored_intent(intent): #not mointored intents - set flows only based on policy
     chosen_route = get_route_name_with_smallest_load()
@@ -433,6 +422,7 @@ def change_monitored_intent_route():
     global monitored_intent
     print("Monitored intent is being removed: {}".format(monitored_intent))
     delete_flow_between_hosts(monitored_intent)
+    process_monitored_intent()
 
 def setup_switch_host_connections(switch):
     if switch == "s1":
