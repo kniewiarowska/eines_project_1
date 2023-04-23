@@ -33,10 +33,10 @@ links = []
 loaded_intents = []
 monitored_intent = {}
 delays = {switch: 0 for switch in ["s2", "s3", "s4"]}
-portstats_request_times = {switch: 0 for switch in ["s2", "s3","s4"]}
-portstats_response_times = {switch: 0 for switch in ["s2", "s3","s4"]}
-switch_controller_delays = {switch: 0 for switch in ["s2", "s3","s4"]}
-switch_controller_delay = {switch: 0 for switch in ["s2", "s3","s4"]}
+portstats_request_times = {switch: 0 for switch in ["s1", "s2", "s3","s4"]}
+portstats_response_times = {switch: 0 for switch in ["s1", "s2", "s3","s4"]}
+switch_controller_delays = {switch: 0 for switch in ["s1", "s2", "s3","s4"]}
+switch_controller_delay = {switch: 0 for switch in ["s1","s2", "s3","s4"]}
 packets_sent = {switch: {interface: 0 for interface in interfaces[switch]} for switch in switches} 
 packets_received = {switch: {interface: 0 for interface in interfaces[switch]} for switch in switches} ## jak wyżej, tylko że dla odebranych pakietów
 packets_sent_old = {switch: {interface: 0 for interface in interfaces[switch]} for switch in switches} ## jak wyżej, tylko to wartość poprzednich statystyk
@@ -54,15 +54,8 @@ ARP = 0x0806
 def getTimestamp():
     return int(time.time() * 10000) - controller_start_time
 
-class ProbePacket(packet_base):
-      #My Protocol packet struct
-  """
-  myproto class defines our special type of packet to be sent all the way along including the link between the switches to measure link delays;
-  it adds member attribute named timestamp to carry packet creation/sending time by the controller, and defines the 
-  function hdr() to return the header of measurement packet (header will contain timestamp)
-  """
-  #For more info on packet_base class refer to file pox/lib/packet/packet_base.py
 
+class ProbePacket(packet_base):
   def __init__(self):
      packet_base.__init__(self)
      self.timestamp=0
@@ -106,7 +99,7 @@ def _timer_func():
     stat_request_message = of.ofp_stats_request(body=of.ofp_port_stats_request())
     for switch in ["s1", "s2", "s3", "s4", "s5"]:
         portstats_request_times[switch] = getTimestamp()
-        if(switch in ["s2", "s3", "s4"]):
+        if(switch in ["s1", "s2", "s3", "s4"]):
             send_message(switch, stat_request_message)
     send_probe_packets()
     print("  -  -  -  -  -  -  -")
@@ -117,6 +110,7 @@ def _timer_func():
     print(" ")
     #check if the latency is low enough
     check_if_monitored_intent_is_fulfilled()
+    print(delays)
 
     #check if the intent should be removed or not
     if new_monitored_intent_counter > MAX_MONITORED_INTENT_TIME:
@@ -213,75 +207,25 @@ def delete_flow(switch, source, destination):
         #print("connection {} {}".format(dpids[switch], flow_mod))
         connection.send(flow_mod)
     
-
-def setup_routing(switch):
-    print("Setting up routing for {}".format(switch))
-    if switch == "s1":
-        for dst in ["10.0.0.4", "10.0.0.5", "10.0.0.6"]:
-            set_flow_by_destination(switch=switch, destination=dst, out_port=5)
-        set_flow_by_destination(switch=switch, destination="10.0.0.1", out_port=1)
-        set_flow_by_destination(switch=switch, destination="10.0.0.2", out_port=2)
-        set_flow_by_destination(switch=switch, destination="10.0.0.3", out_port=3)
-    if switch == "s5":
-        for dst in ["10.0.0.1", "10.0.0.2", "10.0.0.3"]:
-            set_flow_by_destination(switch=switch, destination=dst, out_port=2)
-        set_flow_by_destination(switch=switch, destination="10.0.0.4", out_port=4)
-        set_flow_by_destination(switch=switch, destination="10.0.0.5", out_port=5)
-        set_flow_by_destination(switch=switch, destination="10.0.0.6", out_port=6)
-    if switch in ["s2", "s3", "s4"]:
-        port_mapping = {1: 2, 2: 1}
-        for in_port, out_port in port_mapping.items():
-            set_flow_by_in_port(switch=switch, in_port=in_port, out_port=out_port)
-
 def handle_received_probe(switch, packet):
     c = packet.find('ethernet').payload
     d,= struct.unpack('!I', c)
-    delays[switch] = (getTimestamp() - switch_controller_delays[switch] - d) / 10
+    delays[switch] = (getTimestamp() - d - switch_controller_delays[switch] - switch_controller_delays["s1"]) / 10
     # print(getTimestamp() - d - switch_controller_delays[switch])
     # print(switch_controller_delays[switch])
-
-def handle_arp_packet(packet, connection):
-    #obsługa ARP REQUEST Packet
-    if packet.opcode == 1:
-        msg = of.ofp_flow_mod()
-        msg.priority =1
-        msg.idle_timeout = 0
-        msg.match.in_port =1
-        msg.match.dl_type=0x0806
-        msg.actions.append(of.ofp_action_output(port = 2))
-        #print("dpid: {} msg: {}".format(connection.dpid, msg))
-        connection.send(msg)  
-
-    #obłsuga ARP REPLY Packet
-    if packet.opcode == 2:
-        msg = of.ofp_flow_mod()
-        msg.priority =1
-        msg.idle_timeout = 0
-        msg.match.in_port =2
-        msg.match.dl_type=0x0806
-        msg.actions.append(of.ofp_action_output(port = 1))
-        connection.send(msg)
 
 def handle_PacketIn(event):
     dpid = event.connection.dpid
     switch = get_switch_by_dpid(dpid)
     packet = event.parsed
     arp = packet.find("arp")
-    # tu sie zwraca None
     ip = packet.find("ipv4")
 
-    if packet.type==0x5577: #0x5577 is unregistered EtherType, here assigned to 
+    if packet.type==0x5577:
         handle_received_probe(switch, packet)
-    if arp is not None:
-        handle_arp_packet(arp, event.connection)
-    if ip is not None:
-        print("Switch {} wants to know how to forward an IP packet")
+        return
+    print("Switch {} wants to know how to forward an IP packet: {}".format(switch, packet))
 
-    # setup_routing(switch)
-    # print("Switch {} doesnt know how to handle packet: {}".format(switch, packet.__dict__))
-    # if ip is not None:
-    #     print("Switch {} wants to know how to forward an IP packet from {} to {}".format(ip.src, ip.dst))
-    # setup_routing(switch)
 
 def check_if_monitored_intent_is_fulfilled():
     global monitored_intent, not_fulfilled_monitored_intent_counter
