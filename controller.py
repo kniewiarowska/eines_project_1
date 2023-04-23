@@ -43,8 +43,10 @@ packets_sent_old = {switch: {interface: 0 for interface in interfaces[switch]} f
 packets_received_old = {switch: {interface: 0 for interface in interfaces[switch]} for switch in switches} ## jak wyżej, tylko dla odebranych pakietów
 packet_out_time = 0
 not_fulfilled_monitored_intent_counter = 0
+new_monitored_intent_counter = 0
 packet_in_times = {"s2": 0, "s3": 0, "s4": 0}
-MAX_TIME_EXCEEDED_MONITORED_INTENT = 10
+MAX_TIME_EXCEEDED_MONITORED_INTENT = 6
+MAX_MONITORED_INTENT_TIME = 15
 IP = 0x0800
 ARP = 0x0806
 
@@ -100,15 +102,31 @@ def send_message(switch, message):
     return core.openflow.getConnection(dpids[switch]).send(message)
 
 def _timer_func():
+    global new_monitored_intent_counter, monitored_intent
     stat_request_message = of.ofp_stats_request(body=of.ofp_port_stats_request())
     for switch in ["s1", "s2", "s3", "s4", "s5"]:
         portstats_request_times[switch] = getTimestamp()
         if(switch in ["s2", "s3", "s4"]):
             send_message(switch, stat_request_message)
     send_probe_packets()
+    print("  -  -  -  -  -  -  -")
     print("Delays to switches: {}".format(delays))
     print("Flows load: {}".format(get_routes_statistics()))
+    print("Monitored intent: {}".format(monitored_intent))
+    print("Existing flows: {}".format(flow_table))
+    print(" ")
+    #check if the latency is low enough
     check_if_monitored_intent_is_fulfilled()
+
+    #check if the intent should be removed or not
+    if new_monitored_intent_counter > MAX_MONITORED_INTENT_TIME:
+        new_monitored_intent_counter = 0
+        print("## The time for monitored intent has expired, setting new monitored intent ")
+        if loaded_intents:
+            get_new_monitored_intent()
+    new_monitored_intent_counter = new_monitored_intent_counter + 1
+        
+
 
 def handle_portstats_received(event):
     # Observe the handling of port statistics provided by this function.
@@ -231,7 +249,7 @@ def handle_arp_packet(packet, connection):
         msg.match.in_port =1
         msg.match.dl_type=0x0806
         msg.actions.append(of.ofp_action_output(port = 2))
-        print("dpid: {} msg: {}".format(connection.dpid, msg))
+        #print("dpid: {} msg: {}".format(connection.dpid, msg))
         connection.send(msg)  
 
     #obłsuga ARP REPLY Packet
@@ -257,7 +275,7 @@ def handle_PacketIn(event):
     if arp is not None:
         handle_arp_packet(arp, event.connection)
     if ip is not None:
-        print("Switch {} wants to know how to forward an IP packet from {} to {}".format(ip.src, ip.dst))
+        print("Switch {} wants to know how to forward an IP packet")
 
     # setup_routing(switch)
     # print("Switch {} doesnt know how to handle packet: {}".format(switch, packet.__dict__))
@@ -270,7 +288,7 @@ def check_if_monitored_intent_is_fulfilled():
     monitored_flow = find_flow_to_intent(monitored_intent)
     if monitored_flow is None:
         return
-    print("monitored flow: {} {}".format(monitored_flow, monitored_flow["route"]))
+
     middle_switch = map_route_name_to_middle_switch(monitored_flow["route"])
     if delays[middle_switch] > monitored_intent["latency"]:
         print("[{}] A ROUTE {} ({}) DOESN'T FULFILL THE INTENT'S LATENCY {} ms".format(not_fulfilled_monitored_intent_counter, monitored_flow["route"], middle_switch, monitored_intent["latency"]))
@@ -278,7 +296,8 @@ def check_if_monitored_intent_is_fulfilled():
         if not_fulfilled_monitored_intent_counter > MAX_TIME_EXCEEDED_MONITORED_INTENT:
             not_fulfilled_monitored_intent_counter = 0
             change_monitored_intent_route()
-            
+    else:
+        not_fulfilled_monitored_intent_counter = 0    
 
 def load_intents():
     global loaded_intents
@@ -377,27 +396,36 @@ def process_monitored_intent():
             suitable_switch = {"switch": interface_delay, "delay": delays[interface_delay]}
     chosen_route = ""
     if not suitable_switch:
-        print("No suitable route available for max latency {}".format(intent["latency"]))
-        return
+        print("No suitable route available for max latency {} - the route with smallest load is chosen".format(intent["latency"]))
+        chosen_route = get_route_name_with_smallest_load()
+        if chosen_route == "upper":
+            set_upper_route(intent["source"], intent["destination"])
+            print("A flow for monitored intent {} was set through an upper route".format(intent))
+        if chosen_route == "middle":            
+            set_middle_route(intent["source"], intent["destination"])
+            print("A flow for monitored intent {} was set through a middle route".format(intent))
+        if chosen_route == "down":
+            set_down_route(intent["source"], intent["destination"])
+            print("A flow for monitored intent {} was set through a down route".format(intent))
     elif suitable_switch["switch"] == "s2":
         set_upper_route(intent["source"], intent["destination"])
         chosen_route = "upper"
-        print("A flow for intent {} was set through an upper route".format(intent))
+        print("A flow for monitored intent {} was set through an upper route".format(intent))
     elif suitable_switch["switch"] == "s3":
         set_middle_route(intent["source"], intent["destination"])
         chosen_route = "middle"
-        print("A flow for intent {} was set through a middle route".format(intent))
+        print("A flow for monitored intent {} was set through a middle route".format(intent))
     elif suitable_switch["switch"] == "s4":
         set_down_route(intent["source"], intent["destination"])
         chosen_route = "down"
-        print("A flow for intent {} was set through a down route".format(intent))
+        print("A flow for monitored intent {} was set through a down route".format(intent))
     
     flow_table.append({"id": str(uuid.uuid1()), "source": intent["source"], "destination": intent["destination"], "route": chosen_route})
 
 def process_not_mointored_intent(intent): #not mointored intents - set flows only based on policy
     chosen_route = get_route_name_with_smallest_load()
     set_route(chosen_route, intent["source"], intent["destination"])
-    flow_table.append({"id": (len(flow_table) + 1), "source": intent["source"], "destination": intent["destination"], "route": chosen_route})
+    flow_table.append({"id": str(uuid.uuid1()), "source": intent["source"], "destination": intent["destination"], "route": chosen_route})
 
 def get_route_name_with_smallest_load():
     route_names = ["upper", "middle", "down"]
@@ -420,9 +448,32 @@ def get_the_index_of_min_load(loads):
 
 def change_monitored_intent_route():
     global monitored_intent
-    print("Monitored intent is being removed: {}".format(monitored_intent))
+    print("The monitored intent's flow is being changed: {}".format(monitored_intent))
     delete_flow_between_hosts(monitored_intent)
     process_monitored_intent()
+
+def get_new_monitored_intent():
+    global monitored_intent
+    delete_flow_between_hosts(monitored_intent)
+    if len(loaded_intents) == 1:
+        monitored_intent = {}
+        loaded_intents.pop(0)
+        print("EVERYTHING WAS REMOVED")
+    if len(loaded_intents) > 1:
+        loaded_intents.pop(0)
+        monitored_intent = loaded_intents[0]
+        print("~ ~ Setting up new monitored intent: {} ~ ~".format(monitored_intent))
+        check_if_flow_for_new_monitored_intent_is_ok()
+
+def check_if_flow_for_new_monitored_intent_is_ok():
+    global monitored_intent
+    current_monitored_flow = find_flow_to_intent(monitored_intent)
+    middle_switch = map_route_name_to_middle_switch(current_monitored_flow["route"])
+    if delays[middle_switch] > monitored_intent["latency"]:
+        #usuwamy flow i stawiamy nowy
+        print("The current flow route's delay is too big - changing a route for this flow")
+        delete_flow_between_hosts(monitored_intent)
+        process_monitored_intent()
 
 def setup_switch_host_connections(switch):
     if switch == "s1":
