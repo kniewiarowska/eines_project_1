@@ -3,8 +3,8 @@
 ## Development
 - VS Code Remote Development Extension Pack
 - Łączymy się z VMką przez SSH za pomocą VS Code
-- dzięki temu developujemy z lokalnego kompa, a pliki są na VMce
-- ⚠ VS Code nie wspiera już chyba pythona 2.7, więc intellisense będzie robił wzium
+- dzięki temu developujemy z lokalnego komputera, a pliki są na VMce
+- ⚠ VS Code nie wspiera już chyba pythona 2.7, więc intellisense będzie się skarżył
 - żeby pobrać paczki do pythona trzeba pobrać pip:
   ```
   #jednorazowo
