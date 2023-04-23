@@ -45,8 +45,8 @@ packet_out_time = 0
 not_fulfilled_monitored_intent_counter = 0
 new_monitored_intent_counter = 0
 packet_in_times = {"s2": 0, "s3": 0, "s4": 0}
-MAX_TIME_EXCEEDED_MONITORED_INTENT = 30
-MAX_MONITORED_INTENT_TIME = 11
+MAX_TIME_EXCEEDED_MONITORED_INTENT = 6
+MAX_MONITORED_INTENT_TIME = 15
 IP = 0x0800
 ARP = 0x0806
 
@@ -439,7 +439,7 @@ def get_the_index_of_min_load(loads):
 
 def change_monitored_intent_route():
     global monitored_intent
-    print("The new monitored intent is being changed: {}".format(monitored_intent))
+    print("The monitored intent's flow is being changed: {}".format(monitored_intent))
     delete_flow_between_hosts(monitored_intent)
     process_monitored_intent()
 
@@ -453,6 +453,7 @@ def get_new_monitored_intent():
     if len(loaded_intents) > 1:
         loaded_intents.pop(0)
         monitored_intent = loaded_intents[0]
+        print("~ ~ Setting up new monitored intent: {} ~ ~".format(monitored_intent))
         check_if_flow_for_new_monitored_intent_is_ok()
 
 def check_if_flow_for_new_monitored_intent_is_ok():
@@ -461,6 +462,7 @@ def check_if_flow_for_new_monitored_intent_is_ok():
     middle_switch = map_route_name_to_middle_switch(current_monitored_flow["route"])
     if delays[middle_switch] > monitored_intent["latency"]:
         #usuwamy flow i stawiamy nowy
+        print("The current flow route's delay is too big - changing a route for this flow")
         delete_flow_between_hosts(monitored_intent)
         process_monitored_intent()
 
