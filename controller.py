@@ -165,13 +165,14 @@ def set_flow_by_in_port(switch, in_port, out_port):
         msg.actions.append(of.ofp_action_output(port=out_port))
         send_message(switch, msg)
 
-def delete_flow(dpid, match):
+def delete_flow(in_port, dpid, match):
     connection = core.openflow.getConnection(dpid)
     if connection is None:
         print("Failure during getting a connection")
         return
     flow_mod = of.ofp_flow_mod(command=of.OFPFC_DELETE)
     flow_mod.match = match
+    #flow_mod.actions.append(of.ofp_action_output(port=in_port))
     print("connection {} {}".format(dpid, flow_mod))
     connection.send(flow_mod)
     #msg.send()
@@ -313,16 +314,31 @@ def set_down_route(source, destination):
     set_flow_by_destination(switch="s5", destination=source_ip, out_port=3)
 
 def create_match(source_ip, destination_ip):
-    return of.ofp_match(in_port=2, dl_type=0x800, nw_src=source_ip, nw_dst=destination_ip)
+    return of.ofp_match(dl_type=0x800, nw_src=source_ip, nw_dst=destination_ip)
 
-def delete_flow_between_hosts(source, destination):
+def delete_flow_between_hosts(intent):
     global flow_table
     s1_dpid = dpids["s1"]
     s5_dpid = dpids["s5"]
+    matching_flow = find_flow_to_intent(intent)
+    source = map_host_name_to_address(intent["source"])
+    destination = map_host_name_to_address(intent["destination"])
+    if matching_flow["route"] == "upper":
+        in_port = 4
+    elif matching_flow["route"] == "middle":
+        in_port = 5
+    elif matching_flow["route"] == "down":
+        in_port = 6
     match = create_match(source, destination)
-    delete_flow(s1_dpid, match)
-    delete_flow(s5_dpid, match)
-    matching_flow = {}
+    delete_flow(in_port, s1_dpid, match)
+    if matching_flow["route"] == "upper":
+        in_port = 1
+    elif matching_flow["route"] == "middle":
+        in_port = 2
+    elif matching_flow["route"] == "down":
+        in_port = 3
+    match = create_match(source, destination)
+    delete_flow(in_port, s5_dpid, match)
     source_name = map_address_to_host_name(source)
     destination_name = map_address_to_host_name(destination)
     for index, flow in enumerate(flow_table):
@@ -415,11 +431,8 @@ def get_the_index_of_min_load(loads):
 
 def change_monitored_intent_route():
     global monitored_intent
-    source_ip = map_host_name_to_address(monitored_intent["source"])
-    destination_ip = map_host_name_to_address(monitored_intent["destination"])
     print("Monitored intent is being removed: {}".format(monitored_intent))
-    #print("IPs: {} {}".format(source_ip, destination_ip))
-    delete_flow_between_hosts(source_ip, destination_ip)
+    delete_flow_between_hosts(monitored_intent)
 
 def setup_switch_host_connections(switch):
     if switch == "s1":
