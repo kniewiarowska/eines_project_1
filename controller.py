@@ -424,6 +424,19 @@ def change_monitored_intent_route():
     delete_flow_between_hosts(monitored_intent)
     process_monitored_intent()
 
+def get_new_monitored_intent():
+    global monitored_intent, not_fulfilled_monitored_intent_counter
+    not_fulfilled_monitored_intent_counter = 10
+    print("Monitored intent is being removed: {}".format(monitored_intent))
+    delete_flow_between_hosts(monitored_intent)
+    loaded_intents.pop(0)
+    monitored_intent = load_intents[0]
+    check_if_monitored_intent_is_fulfilled()
+
+
+
+
+
 def setup_switch_host_connections(switch):
     if switch == "s1":
         set_flow_by_destination(switch="s1", destination="10.0.0.1", out_port=1)
